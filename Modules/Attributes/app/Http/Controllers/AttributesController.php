@@ -72,7 +72,7 @@ class AttributesController extends Controller
         $data = $request->validated();
         $attribute->update($data);
         $notifications->create(
-            " حذف  ویژگی",
+            " ویرایش  ویژگی",
             " ویژگی  {$attribute->name}در سیستم ویرایش  شد",
             "notification_product",
             ['attribute' => $attribute->id]

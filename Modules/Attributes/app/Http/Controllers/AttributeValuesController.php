@@ -81,7 +81,7 @@ class AttributeValuesController extends Controller
      */
     public function update(UpdateAttributeValueRequest $request, Attribute $attribute, AttributeValue $value, NotificationService $notifications)
     {
-        if ($value->attribute_id !== $attribute->id) {
+        if ($value->attribute_id != $attribute->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'مقدار برای این ویژگی پیدا نشد',
