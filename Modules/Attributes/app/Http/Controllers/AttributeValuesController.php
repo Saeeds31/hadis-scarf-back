@@ -132,7 +132,7 @@ class AttributeValuesController extends Controller
      */
     public function destroy(Attribute $attribute, AttributeValue $value, NotificationService $notifications)
     {
-        if ($value->attribute_id !== $attribute->id) {
+        if ($value->attribute_id != $attribute->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'مقدار مد نظر برای این ویژگی پیدا نشد',
