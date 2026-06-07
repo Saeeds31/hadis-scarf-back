@@ -18,9 +18,10 @@ class CategoriesController extends Controller
      */
     public function index()
     {
-        $categories = Category::with('children')
+        $categories = Category::with('allChildren')
             ->whereNull('parent_id')
             ->get();
+
         return response()->json([
             'success' => true,
             'data' => $categories,
