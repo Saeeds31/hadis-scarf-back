@@ -42,7 +42,7 @@ class ArticlesController extends Controller
         if ($categoryIds->isNotEmpty()) {
             $relatedArticles = Article::with('author')
                 ->whereHas('categories', function ($q) use ($categoryIds) {
-                    $q->whereIn('categories.id', $categoryIds);
+                    $q->whereIn('article_categories.id', $categoryIds);
                 })
                 ->where('id', '!=', $article->id)
                 ->latest('created_at')
