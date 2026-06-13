@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Modules\Articles\Models\Article;
+use Modules\Attributes\Models\Attribute;
 use Modules\Banners\Models\Banner;
 use Modules\Categories\Models\Category;
 use Modules\Menus\Models\Menu;
@@ -57,17 +58,20 @@ class FrontController extends Controller
     public function filters()
     {
         $data = [];
-        $data['categories'] = Category::with('children')
+        $data['categories'] = Category::with('allChildren')
             ->whereNull('parent_id')
             ->get();
         $data['price'] = $this->priceRange();
+        $data['color'] = Attribute::find(1)->values;
+        $data['ghavareh'] = Attribute::find(2)->values;
+        $data['tarh'] = Attribute::find(3)->values;
         return response()->json([
             'success' => true,
             'message' => 'فیلتر های محصولات',
             'data'    => $data
         ], 200);
     }
-   
+
     public function HomeProducts()
     {
         $categories = Category::with([

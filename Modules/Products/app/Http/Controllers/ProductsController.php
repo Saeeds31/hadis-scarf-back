@@ -340,6 +340,7 @@ class ProductsController extends Controller
                     $attributesById[$attr->id]['values'][$value->id] = [
                         'id' => $value->id,
                         'value' => $value->value,
+                        'extra_value' => $value->extra_value,
                         'is_available' => $isAvailable
                     ];
                 } else {
