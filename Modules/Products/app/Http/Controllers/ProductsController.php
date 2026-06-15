@@ -215,7 +215,7 @@ class ProductsController extends Controller
     }
     public function frontIndex(Request $request)
     {
-        $query = Product::with(['categories', 'variants'])
+        $query = Product::with(['categories', 'variants.values'])
             ->where('status', "published")->latest(); // فقط فعال‌ها
 
         if ($search = $request->get('search')) {
