@@ -333,7 +333,7 @@ class ProductsController extends Controller
                 if (!isset($attributesById[$attr->id])) {
                     $attributesById[$attr->id] = [
                         'id' => $attr->id,
-                        'title' => $attr->title,
+                        'title' => $attr->name,
                         'values' => []
                     ];
                     $attributeOrder[] = $attr->id;
@@ -343,7 +343,6 @@ class ProductsController extends Controller
                     $attributesById[$attr->id]['values'][$value->id] = [
                         'id' => $value->id,
                         'value' => $value->value,
-                        'title' => $value->title,
                         'extra_value' => $value->extra_value,
                         'is_available' => $isAvailable
                     ];
