@@ -77,7 +77,10 @@ class FrontController extends Controller
     {
         $categories = Category::with([
             'products' => function ($q) {
-                $q->where('status', 'published')->latest()->take(8);
+                $q->where('status', 'published')
+                    ->with(['variants.values.attribute'])
+                    ->latest()
+                    ->take(8);
             }
         ])
             ->where('show_products_in_home', true)
@@ -86,7 +89,7 @@ class FrontController extends Controller
         $result = $categories->map(function ($category) {
             return [
                 'category' => $category,
-                'products' => $category->products,
+                'products' => ProductCardResource::collection($category->products),
             ];
         });
 

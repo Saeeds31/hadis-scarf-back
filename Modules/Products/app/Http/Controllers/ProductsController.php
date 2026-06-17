@@ -10,6 +10,7 @@ use Modules\Orders\Models\Order;
 use Modules\Orders\Models\OrderItem;
 use Modules\Products\Http\Requests\ProductStoreRequest;
 use Modules\Products\Http\Requests\ProductUpdateRequest;
+use Modules\Products\Http\Resources\ProductCardResource;
 use Modules\Products\Models\Product;
 use Modules\Products\Models\ProductVariant;
 use Modules\Wishlist\Models\Wishlist;
@@ -204,19 +205,24 @@ class ProductsController extends Controller
     }
     public function search(Request $request)
     {
-        $query = Product::with(['categories']);
+        $query = Product::with([
+            'categories',
+            'variants.values.attribute'
+        ]);
+
         if ($search = $request->get('search')) {
             $query->where(function ($q) use ($search) {
                 $q->where('title', 'like', "%{$search}%");
             });
         }
+
         $products = $query->take(15)->get();
-        return response()->json($products);
+
+        return response()->json(ProductCardResource::collection($products));
     }
     public function frontIndex(Request $request)
     {
-        $query = Product::with(['categories', 'variants.values'])
-            ->where('status', "published")->latest(); // فقط فعال‌ها
+        $query = Product::with(['categories', 'variants.values.attribute'])->where('status', "published")->latest(); // فقط فعال‌ها
 
         if ($search = $request->get('search')) {
             $query->where(function ($q) use ($search) {
@@ -296,14 +302,11 @@ class ProductsController extends Controller
                 });
             }
         }
-
-
         $products = $query->paginate(15);
-
         return response()->json([
             'success' => true,
             'message' => 'لیست محصولات',
-            'data'    => $products,
+            'data'    => ProductCardResource::collection($products),
         ]);
     }
     public function frontDetail(Request $request, $id)
@@ -340,6 +343,7 @@ class ProductsController extends Controller
                     $attributesById[$attr->id]['values'][$value->id] = [
                         'id' => $value->id,
                         'value' => $value->value,
+                        'title' => $value->title,
                         'extra_value' => $value->extra_value,
                         'is_available' => $isAvailable
                     ];
@@ -433,34 +437,35 @@ class ProductsController extends Controller
     public function similar($id)
     {
         $product = Product::with('categories:id')->findOrFail($id);
-        // گرفتن ID دسته‌ها
         $categoryIds = $product->categories->pluck('id');
-        // پیدا کردن محصولات مشابه
+
+        $with = [
+            'images:id,product_id,path',
+            'variants.values.attribute'
+        ];
+
         $similar = Product::where('status', 'published')
             ->whereHas('categories', function ($q) use ($categoryIds) {
                 $q->whereIn('categories.id', $categoryIds);
             })
-            ->where('id', '!=', $product->id) // حذف محصول اصلی
-            ->select('id', 'title', 'main_image', 'price', 'final_price')
-            ->with([
-                'images:id,product_id,path',
-                'variants:id,product_id,price,stock'
-            ])
+            ->where('id', '!=', $product->id)
+            ->with($with)
             ->limit(10)
             ->get();
-        // اگر مشابه پیدا نشد → fallback
+
         if ($similar->isEmpty()) {
             $similar = Product::where('status', 'published')
                 ->where('id', '!=', $product->id)
+                ->with($with)
                 ->orderBy('created_at', 'desc')
-                ->select('id', 'title', 'main_image', 'price', 'final_price')
                 ->limit(10)
                 ->get();
         }
+
         return response()->json([
             'success' => true,
             'data' => [
-                'similar_products' => $similar
+                'similar_products' => ProductCardResource::collection($similar)
             ]
         ]);
     }
