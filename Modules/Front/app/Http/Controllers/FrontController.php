@@ -11,6 +11,7 @@ use Modules\Attributes\Models\Attribute;
 use Modules\Banners\Models\Banner;
 use Modules\Categories\Models\Category;
 use Modules\Menus\Models\Menu;
+use Modules\Products\Http\Resources\ProductCardResource;
 use Modules\Products\Models\Product;
 use Modules\Products\Models\ProductVariant;
 use Modules\Settings\Models\Setting;
@@ -95,10 +96,14 @@ class FrontController extends Controller
     {
         $data = [];
         $data['selected_categories'] = Category::where('show_in_home', 1)->get();
-        $data['top_discounted_products'] = Product::topDiscounted();
+        $data['top_discounted_products'] = ProductCardResource::collection(
+            Product::topDiscounted()
+        );
         $data['banners'] = Banner::groupedByPosition();
         $data['sliders'] = Slider::orderBy('id')->get();
-        $data['new_products'] = Product::latestProducts();
+        $data['new_products'] = ProductCardResource::collection(
+            Product::latestProducts()
+        );
         $data['blogs'] = Article::latestArticles();
         return response()->json([
             'success' => true,

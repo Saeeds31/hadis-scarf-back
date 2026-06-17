@@ -53,9 +53,9 @@ class Product extends Model
         return $this->hasMany(Cart::class);
     }
     public function orderItems()
-{
-    return $this->hasMany(OrderItem::class);
-}
+    {
+        return $this->hasMany(OrderItem::class);
+    }
     public function comments()
     {
         return $this->morphMany(Comment::class, 'commentable');
@@ -94,21 +94,27 @@ class Product extends Model
     {
         return self::select('*')
             ->selectRaw("
-            CASE 
-                WHEN discount_type = 'percent' 
-                    THEN (price * discount_value / 100)
-                WHEN discount_type = 'fixed' 
-                    THEN discount_value
-                ELSE 0
-            END as real_discount
-        ")
+                CASE 
+                    WHEN discount_type = 'percent' 
+                        THEN (price * discount_value / 100)
+                    WHEN discount_type = 'fixed' 
+                        THEN discount_value
+                    ELSE 0
+                END as real_discount
+            ")
+            ->with([
+                'variants.values.attribute'
+            ])
             ->orderByDesc('real_discount')
             ->limit($limit)
             ->get();
     }
     public static function latestProducts($limit = 8)
     {
-        return self::where('status', "published") // فقط فعال‌ها
+        return self::where('status', 'published')
+            ->with([
+                'variants.values.attribute'
+            ])
             ->orderBy('created_at', 'desc')
             ->take($limit)
             ->get();
