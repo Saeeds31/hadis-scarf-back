@@ -306,7 +306,15 @@ class ProductsController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'لیست محصولات',
-            'data'    => ProductCardResource::collection($products),
+            'data'    => [
+                'data'        => ProductCardResource::collection($products->items()),
+                'current_page' => $products->currentPage(),
+                'last_page'    => $products->lastPage(),
+                'per_page'     => $products->perPage(),
+                'total'        => $products->total(),
+                'next_page_url' => $products->nextPageUrl(),
+                'prev_page_url' => $products->previousPageUrl(),
+            ],
         ]);
     }
     public function frontDetail(Request $request, $id)
