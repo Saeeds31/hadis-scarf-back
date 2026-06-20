@@ -415,6 +415,7 @@ class ProductsController extends Controller
                     'title' => $product->title,
                     'description' => $product->description,
                     'price' => $product->price,
+                    'images' => $product->images,
                     'final_price' => $product->final_price,
                     'main_image' => $product->main_image,
                 ],
