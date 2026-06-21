@@ -63,7 +63,7 @@ class StoryController extends Controller
         $notifications->create(
             " ثبت  استوری",
             " استوری  {$story->title}در سیستم ثبت  شد",
-            "notification_story",
+            "notification_content",
             ['story' => $story->id]
         );
         return response()->json([
@@ -106,9 +106,23 @@ class StoryController extends Controller
             $path = $request->file('cover')->store('stories/covers', 'public');
             $data['cover'] = $path;
         }
+        if ($request->hasFile('video')) {
+            // حذف فایل قبلی
+            if ($story->video) {
+                Storage::disk('public')->delete($story->video);
+            }
+
+            $pathVideo = $request->file('video')->store('stories/videos', 'public');
+            $data['video'] = $pathVideo;
+        }
 
         $story->update($data);
-
+        $notifications->create(
+            " ویرایش  استوری",
+            " استوری  {$story->title}در سیستم ویرایش  شد",
+            "notification_content",
+            ['story' => $story->id]
+        );
         return response()->json([
             'success' => true,
             'message' => 'استوری با موفقیت بروزرسانی شد',
@@ -125,7 +139,9 @@ class StoryController extends Controller
         if ($story->cover) {
             Storage::disk('public')->delete($story->cover);
         }
-
+        if ($story->video) {
+            Storage::disk('public')->delete($story->video);
+        }
         $story->delete();
 
         return response()->json([
@@ -134,7 +150,7 @@ class StoryController extends Controller
         ]);
     }
 
-  
+
 
     /**
      * افزایش بازدید استوری (API)
@@ -183,7 +199,4 @@ class StoryController extends Controller
             'data' => $stories
         ]);
     }
-
-
-
 }

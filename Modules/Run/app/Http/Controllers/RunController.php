@@ -60,7 +60,7 @@ class RunController extends Controller
             'Menu'   => 'منو',
             'order'   => 'سفارش',
             'city'   => 'شهر',
-            'story'   => 'شهر',
+            'story'   => 'استوری',
             'province'   => 'استان',
             'product'   => 'محصول',
             'Setting'   => 'تنظیمات',
