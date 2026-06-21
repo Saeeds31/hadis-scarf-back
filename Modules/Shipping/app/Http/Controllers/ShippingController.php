@@ -44,7 +44,7 @@ class ShippingController extends Controller
                 $condition = $Shipping->conditions()->create([
                     'condition'   => $condition['condition'] ?? "total",
                     'type' => $condition['type'] ?? "==",
-                    'value' => $condition['value'] ?? 0,
+                    'value' => $condition['value'] ?? 0
                 ]);
             }
         }
@@ -361,7 +361,7 @@ class ShippingController extends Controller
                     'id'          => $shipping->id,
                     'name'        => $shipping->title,
                     'description' => $shipping->description,
-                    'cost'        => (int) $shipping->cost,,
+                    'cost'        => (int) $shipping->cost,
 
                 ];
             }

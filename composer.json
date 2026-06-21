@@ -52,6 +52,7 @@
             "Modules\\Coupons\\": "Modules/Coupons/app/",
             "Modules\\Banners\\": "Modules/Banners/app/",
             "Modules\\Comments\\": "Modules/Comments/app/",
+            "Modules\\Story\\": "Modules/Story/app/",
             "Modules\\Shipping\\": "Modules/Shipping/app/",
             "Modules\\Orders\\": "Modules/Orders/app/",
             "Modules\\Settings\\": "Modules/Settings/app/",
