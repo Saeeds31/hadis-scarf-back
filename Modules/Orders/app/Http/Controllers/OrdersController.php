@@ -484,138 +484,90 @@ class OrdersController extends Controller
             ], 400);
         }
 
-        $provinceId = $address->province_id;
-        $cityId     = $address->city_id;
+        // --------------------------------------------------------
+        // 3) محاسبه subtotal (هماهنگ با checkout: بر اساس item->price)
+        // --------------------------------------------------------
+        $subtotal = $cartItems->sum(fn($item) => $item->price * $item->quantity);
+        $totalQuantity = $cartItems->sum('quantity');
+        $totalWeight = $cartItems->sum(fn($item) => ($item->variant->weight ?? 0) * $item->quantity);
 
         // --------------------------------------------------------
-        // 3) محاسبه subtotal + product discounts (نسخه جدید)
+        // 4) محاسبه هزینه حمل (هماهنگ با checkout: از طریق ShippingService)
         // --------------------------------------------------------
-        $subtotal = 0;
-        $productDiscount = 0;
-
-        foreach ($cartItems as $item) {
-
-            $subtotal += $item->price_original * $item->quantity;
-
-            // مقدار تخفیف محصول = قیمت اصلی - قیمت بعد تخفیف
-            if ($item->price_final != $item->price_original) {
-                $discountPerItem = $item->price_original - $item->price_final;
-
-                if ($discountPerItem > 0) {
-                    $productDiscount += ($discountPerItem * $item->quantity);
-                }
-            }
-        }
-
-
-        // --------------------------------------------------------
-        // 4) محاسبه هزینه حمل
-        // --------------------------------------------------------
-        $shippingCost = null;
-
-        if (!$request->shipping_method_id) {
+        if (!$request->shipping_id) {
             return response()->json([
                 'success' => false,
                 'message' => 'لطفاً روش حمل را انتخاب کنید'
             ], 400);
         }
 
-        $selectedMethod = ShippingMethod::where('id', $request->shipping_method_id)
-            ->where('status', true)
-            ->with('ranges')
-            ->first();
+        $shipping = Shipping::find($request->shipping_id);
 
-        if (!$selectedMethod) {
+        if (!$shipping) {
             return response()->json([
                 'success' => false,
                 'message' => 'روش حمل معتبر نیست'
             ], 400);
         }
 
-        // 4.1 رنج شهر
-        if ($cityId) {
-            $range = $selectedMethod->ranges()
-                ->where('city_id', $cityId)
-                ->where('min_order_amount', '<=', $subtotal)
-                ->where('max_order_amount', '>=', $subtotal)
-                ->first();
+        $shippingCost = (new ShippingService)->calculateCost(
+            $request->shipping_id,
+            $address->province_id,
+            $address->city_id,
+            $subtotal,
+            $totalQuantity,
+            $totalWeight
+        );
 
-            if ($range) {
-                $shippingCost = $range->cost;
-            }
-        }
-
-        // 4.2 رنج استان
-        if (!$shippingCost && $provinceId) {
-            $range = $selectedMethod->ranges()
-                ->where('province_id', $provinceId)
-                ->whereNull('city_id')
-                ->where('min_order_amount', '<=', $subtotal)
-                ->where('max_order_amount', '>=', $subtotal)
-                ->first();
-
-            if ($range) {
-                $shippingCost = $range->cost;
-            }
-        }
-
-        // 4.3 هزینه پیش فرض
-        if (!$shippingCost) {
-            $shippingCost = $selectedMethod->default_cost;
+        if ($shippingCost === 0 && $shipping->status) {
+            return response()->json([
+                'success' => false,
+                'message' => 'روش حمل انتخابی معتبر نیست'
+            ], 400);
         }
 
         // --------------------------------------------------------
-        // 5) محاسبه تخفیف کپن
+        // 5) محاسبه تخفیف کوپن (هماهنگ با checkout: از طریق CouponService)
         // --------------------------------------------------------
         $couponDiscount = 0;
+        $coupon = null;
 
-        if ($request->coupon_code) {
-            $coupon = Coupon::where('code', $request->coupon_code)
-                ->where('status', true)
-                ->where('start_date', '<=', now())
-                ->where('end_date', '>=', now())
-                ->first();
+        if ($request->filled('coupon_code')) {
+            $couponResult = (new CouponService)->validateAndCalculate($request->coupon_code, $subtotal, $user->id);
 
-            if ($coupon && $subtotal >= $coupon->min_purchase) {
-
-                if ($coupon->type === 'percent') {
-                    $couponDiscount = ($subtotal * $coupon->value) / 100;
-                } else {
-                    $couponDiscount = $coupon->value;
-                }
-
-                if (
-                    $coupon->max_discount &&
-                    $couponDiscount > $coupon->max_discount
-                ) {
-                    $couponDiscount = $coupon->max_discount;
-                }
+            if (!$couponResult['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $couponResult['message']
+                ], 422);
             }
+
+            $couponDiscount = $couponResult['discount'];
+            $coupon = $couponResult['coupon'];
         }
 
         // --------------------------------------------------------
         // 6) مبلغ پرداختی
         // --------------------------------------------------------
-        $payable = max(0, $subtotal - $productDiscount - $couponDiscount + $shippingCost);
+        $payable = max(0, $subtotal - $couponDiscount + $shippingCost);
 
         return response()->json([
             'success' => true,
 
             'summary' => [
-                'subtotal'          => (int)$subtotal,
-                'product_discount'  => (int)$productDiscount,
-                'shipping_cost'     => (int)$shippingCost,
-                'coupon_discount'   => (int)$couponDiscount,
-                'payable_amount'    => (int)$payable,
+                'subtotal'          => (int) $subtotal,
+                'shipping_cost'     => (int) $shippingCost,
+                'coupon_discount'   => (int) $couponDiscount,
+                'payable_amount'    => (int) $payable,
             ],
 
             'address' => $address,
             'shipping_method' => [
-                'id' => $selectedMethod->id,
-                'name' => $selectedMethod->name,
-                'cost' => $shippingCost
+                'id'   => $shipping->id,
+                'name' => $shipping->name,
+                'cost' => $shippingCost,
             ],
-            'coupon' => $request->coupon_code ?? null,
+            'coupon' => $coupon?->code ?? null,
         ]);
     }
     public function userDashboardOrders(Request $request)
