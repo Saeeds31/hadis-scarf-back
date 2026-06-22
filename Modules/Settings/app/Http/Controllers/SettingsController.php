@@ -92,7 +92,7 @@ class SettingsController extends Controller
             'settings.*.id'    => 'nullable|integer|exists:settings,id',
             'settings.*.key'   => 'required|string|max:255',
             'settings.*.value' => 'nullable',
-            'settings.*.type'  => 'required|string|in:string,boolean,number,json,text,image',
+            'settings.*.type'  => 'required|string|in:string,boolean,number,json,text,file',
         ]);
 
         foreach ($data['settings'] as $item) {
