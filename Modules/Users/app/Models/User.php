@@ -38,6 +38,17 @@ class User extends Authenticatable
     /**
      * Get all addresses for the user.
      */
+    public function getDisplayName($addressReceiverName = null): string
+    {
+        if (!empty($this->full_name)) {
+            return $this->full_name;
+        }
+
+        if (!empty($addressReceiverName)) {
+            return $addressReceiverName;
+        }
+        return 'کاربر';
+    }
     public function addresses()
     {
         return $this->hasMany(Address::class);

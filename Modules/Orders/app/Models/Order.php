@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Modules\Addresses\Models\Address;
 use Modules\Users\Models\User;
 use Carbon\Carbon;
+use Modules\Shipping\Models\Shipping;
 
 // use Modules\Orders\Database\Factories\OrderFactory;
 
@@ -16,7 +17,7 @@ class Order extends Model
     protected $fillable = [
         'user_id',
         'address_id',
-        'shipping_method_id',
+        'shipping_id',
         'subtotal',
         'discount_amount',
         'shipping_cost',
@@ -35,6 +36,22 @@ class Order extends Model
     // 'paid' → پرداخت شده
     // 'failed' → پرداخت ناموفق
     // 'refunded' → برگشت داده شده
+    public function getStatusLabelAttribute()
+    {
+        $statuses = [
+            'pending' => 'در انتظار پرداخت',
+            'processing' => 'در حال پردازش',
+            'paid' => 'پرداخت شده',
+            'shipped' => 'ارسال شده',
+            'delivered' => 'تحویل داده شده',
+            'cancelled' => 'لغو شده',
+            'completed' => 'کامل شده',
+            'returned' => 'مرجوع شده',
+            'failed' => 'ناموفق',
+        ];
+
+        return $statuses[$this->status] ?? $this->status;
+    }
     public function user()
     {
         return $this->belongsTo(User::class);
@@ -47,7 +64,7 @@ class Order extends Model
 
     public function shippingMethod()
     {
-        return $this->belongsTo(\Modules\Shipping\Models\ShippingMethod::class);
+        return $this->belongsTo(Shipping::class);
     }
 
     public function items()
@@ -61,7 +78,7 @@ class Order extends Model
             'total_orders'   => self::count(),
             'total_sales'    => self::sum('total'),
             'total_discount' => self::sum('discount_amount'),
-            
+
             'today_orders'   => self::whereDate('created_at', Carbon::today())->count(),
             'month_orders'   => self::whereMonth('created_at', Carbon::now()->month)->count(),
         ];

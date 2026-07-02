@@ -3,6 +3,7 @@
 namespace Modules\Orders\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Services\SmsService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -67,7 +68,8 @@ class OrdersController extends Controller
             'payment_status'     => 'nullable|in:pending,paid,failed',
             'status'             => 'nullable|in:pending,processing,completed,cancelled',
         ]);
-
+        $data['shipping_id'] = $data['shipping_method_id'];
+        unset($data['shipping_method_id']);
         $order = Order::create($data);
         $notifications->create(
             "ثبت سفارش",
@@ -109,7 +111,8 @@ class OrdersController extends Controller
             'payment_status'     => 'nullable|in:pending,paid,failed',
             'status'             => 'nullable|in:pending,processing,completed,cancelled',
         ]);
-
+        $data['shipping_id'] = $data['shipping_method_id'];
+        unset($data['shipping_method_id']);
         $order->update($data);
         $notifications->create(
             "ویرایش سفارش",
@@ -170,11 +173,13 @@ class OrdersController extends Controller
                     ], 422);
                 }
             }
+            $data['shipping_id'] = $data['shipping_method_id'];
+            unset($data['shipping_method_id']);
             // 3. ایجاد سفارش
             $order = Order::create([
                 'user_id'            => $data['user_id'],
                 'address_id'         => $data['address_id'],
-                'shipping_method_id' => $data['shipping_method_id'],
+                'shipping_id' => $data['shipping_method_id'],
                 'subtotal'           => $data['subtotal'],
                 'discount_amount'    => $data['discount_amount'] ?? 0,
                 'shipping_cost'      => $data['shipping_cost'] ?? 0,
@@ -255,10 +260,13 @@ class OrdersController extends Controller
         $order->save();
         $notifications->create(
             "تغییر وضعیت",
-            " یک سفارش رد سیستم تغییر وضعیت پیدا کرد",
+            " یک سفارش در سیستم تغییر وضعیت پیدا کرد",
             "notification_order",
             ['order' => $order->id]
         );
+        $smsService = new SmsService();
+        $smsService->sendToKavenegar('change-order-status', $order->user->mobile, $order->id, ['token20' => $order->user->getDisplayName($order->address->receiver_name), 'token2' => $order->status_label]);
+
         return response()->json([
             'message' => 'وضعیت سفارش با موفقیت تغییر کرد',
             'order'   => $order->load(['items', 'user', 'address', 'shippingMethod'])
@@ -536,7 +544,9 @@ class OrdersController extends Controller
                 "notification_order",
                 ['order' => $order->id]
             );
-
+            $smsService = new SmsService();
+            $smsService->sendToKavenegar('customer-order', $user->mobile, $order->id, ['token20' => $user->getDisplayName($address->receiver_name)]);
+            $smsService->sendToAdmins('customer-order-admin', $order->id);
             return response()->json([
                 'order'   => $order->load('items'),
                 'message' => $message,

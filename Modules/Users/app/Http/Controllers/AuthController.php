@@ -3,6 +3,7 @@
 namespace Modules\Users\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
@@ -34,7 +35,6 @@ class AuthController extends Controller
         $this->sendOtp($request->mobile);
         $otp = Otp::where('mobile', $request->mobile)->first();
         return response()->json([
-            'token' => $otp->token,
             'status' => 'register'
         ]);
     }
@@ -71,13 +71,8 @@ class AuthController extends Controller
             ['mobile' => $mobile],
             ['token' => $token, 'expires_at' => now()->addMinutes(5)]
         );
-
-        $response = Http::get("https://api.kavenegar.com/v1/523159597A416A4A5A5A4F57564B7662436A6B55454764467672796F574F735648337055374A4F2B4445553D/verify/lookup.json", [
-            'receptor' => $mobile,
-            'token'    => $token,
-            'template' => "verify"
-        ]);
-        Log::info('Kavenegar response: ' . $response->body());
+        $smsService = new SmsService();
+        $smsService->sendToKavenegar('verify', $mobile, $token);
 
         return true;
     }
@@ -90,7 +85,6 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'OTP sent',
             'success' => true,
-            'token' => $otp->token
         ]);
     }
     // 4) بررسی OTP

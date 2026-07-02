@@ -12,6 +12,7 @@ class ProductCardResource extends JsonResource
             'id'             => $this->id,
             'title'          => $this->title,
             'main_image'     => $this->main_image,
+            'images'     => $this->images,
             'price'          => $this->price,
             'discount_value' => $this->discount_value,
             'discount_type'  => $this->discount_type,
