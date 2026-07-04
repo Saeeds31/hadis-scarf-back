@@ -21,7 +21,6 @@ use Modules\Orders\Models\Order;
 use Modules\Orders\Services\PaymentService;
 use Modules\Products\Models\ProductVariant;
 use Modules\Shipping\Models\Shipping;
-use Modules\Shipping\Models\ShippingMethod;
 use Modules\Shipping\Services\ShippingService;
 use Modules\Users\Models\User;
 use Modules\Wallet\Models\Wallet;
@@ -35,7 +34,7 @@ class OrdersController extends Controller
      */
     public function index(Request $request)
     {
-        $orders = Order::with(['user', 'address', 'shippingMethod'])->paginate(20);
+        $orders = Order::with(['user', 'address', 'shipping'])->paginate(20);
         // اگر کوئری جستجو اومد روی نام کاربر یا شماره موبایل اعمال کن
         if ($search = $request->get('q')) {
             $orders->whereHas('user', function ($q) use ($search) {
@@ -77,7 +76,7 @@ class OrdersController extends Controller
             "notification_order",
             ['order' => $order->id]
         );
-        return response()->json($order->load(['user', 'address', 'shippingMethod']), 201);
+        return response()->json($order->load(['user', 'address', 'shipping']), 201);
     }
 
     /**
@@ -89,7 +88,7 @@ class OrdersController extends Controller
             [
                 'message' => 'جزئیات سفارش',
                 'success' => true,
-                'data' => $order->load(['user', 'address.province', 'address.city', 'shippingMethod', 'items.product', 'items.variant.values'])
+                'data' => $order->load(['user', 'address.province', 'address.city', 'shipping', 'items.product', 'items.variant.values'])
             ]
         );
     }
@@ -120,7 +119,7 @@ class OrdersController extends Controller
             "notification_order",
             ['order' => $order->id]
         );
-        return response()->json($order->load(['user', 'address', 'shippingMethod', 'items']));
+        return response()->json($order->load(['user', 'address', 'shipping', 'items']));
     }
 
     /**
@@ -218,7 +217,7 @@ class OrdersController extends Controller
                 "notification_order",
                 ['order' => $order->id]
             );
-            return response()->json($order->load(['items', 'user', 'address', 'shippingMethod']), 201);
+            return response()->json($order->load(['items', 'user', 'address', 'shipping']), 201);
         });
     }
     public function changeStatus(Request $request, Order $order, NotificationService $notifications)
@@ -269,13 +268,13 @@ class OrdersController extends Controller
 
         return response()->json([
             'message' => 'وضعیت سفارش با موفقیت تغییر کرد',
-            'order'   => $order->load(['items', 'user', 'address', 'shippingMethod'])
+            'order'   => $order->load(['items', 'user', 'address', 'shipping'])
         ]);
     }
     public function todaysOrders()
     {
         $today = Carbon::today();
-        $orders = Order::with(['items', 'user', 'address', 'shippingMethod'])
+        $orders = Order::with(['items', 'user', 'address', 'shipping'])
             ->whereDate('created_at', $today)->where('status', "processing")
             ->get();
 
@@ -685,7 +684,7 @@ class OrdersController extends Controller
     {
         $user = $request->user();
 
-        $query = Order::with(['items', 'address', 'shippingMethod'])
+        $query = Order::with(['items', 'address', 'shipping'])
             ->where('user_id', $user->id);
 
         // فیلتر وضعیت سفارش
@@ -726,7 +725,7 @@ class OrdersController extends Controller
         $order = Order::with([
             'items',
             'address',
-            'shippingMethod',
+            'shipping',
             'user',
         ])->where('id', $orderId)
             ->where('user_id', $user->id) // فقط سفارش‌های خودش

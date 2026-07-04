@@ -62,7 +62,7 @@ class Order extends Model
         return $this->belongsTo(Address::class);
     }
 
-    public function shippingMethod()
+    public function shipping()
     {
         return $this->belongsTo(Shipping::class);
     }
