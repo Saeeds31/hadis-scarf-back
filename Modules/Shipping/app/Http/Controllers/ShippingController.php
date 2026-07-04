@@ -361,6 +361,7 @@ class ShippingController extends Controller
                     'id'          => $shipping->id,
                     'name'        => $shipping->title,
                     'description' => $shipping->description,
+                    'icon' => $shipping->icon,
                     'cost'        => (int) $shipping->cost,
 
                 ];
