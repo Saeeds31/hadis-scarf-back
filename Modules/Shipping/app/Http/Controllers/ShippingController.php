@@ -12,7 +12,6 @@ use Modules\Shipping\Http\Requests\ShippingStoreRequest;
 use Modules\Shipping\Http\Requests\ShippingUpdateRequest;
 use Modules\Shipping\Models\Condition;
 use Modules\Shipping\Models\Shipping;
-use Modules\Shipping\Models\ShippingMethod;
 
 class ShippingController extends Controller
 {
