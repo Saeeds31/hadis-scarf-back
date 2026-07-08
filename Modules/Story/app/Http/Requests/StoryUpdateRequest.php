@@ -14,7 +14,7 @@ class StoryUpdateRequest extends FormRequest
         return [
             'title' => 'sometimes|required|string|max:255',
             'cover' => 'nullable|file|mimes:jpeg,png,jpg,webp|max:2048',
-            'video' => 'nullable|file|max:4096',
+            'video' => 'nullable|file|max:20480',
             'link' => 'nullable|url|max:500',
             'status' => 'sometimes|required|in:draft,published,archived'
         ];

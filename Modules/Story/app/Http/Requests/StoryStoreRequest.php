@@ -14,7 +14,7 @@ class StoryStoreRequest extends FormRequest
         return [
             'title' => 'required|string|max:255',
             'cover' => 'required|file|mimes:jpeg,png,jpg,webp|max:2048',
-            'video' => 'required|file|max:4096',
+            'video' => 'required|file|max:20480',
             'link' => 'required|url|max:500',
             'status' => 'required|in:draft,published,archived'
         ];
