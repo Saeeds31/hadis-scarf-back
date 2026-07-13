@@ -102,9 +102,16 @@ class Product extends Model
                     ELSE 0
                 END as real_discount
             ")
-            ->with([
-                'variants.values.attribute'
-            ])
+            ->where(function ($query) {
+                $query->where(function ($q) {
+                    $q->where('discount_type', 'percent')
+                        ->where('discount_value', '>', 0);
+                })->orWhere(function ($q) {
+                    $q->where('discount_type', 'fixed')
+                        ->where('discount_value', '>', 0);
+                });
+            })
+            ->with(['variants.values.attribute'])
             ->orderByDesc('real_discount')
             ->limit($limit)
             ->get();
