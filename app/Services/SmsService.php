@@ -29,7 +29,7 @@ class SmsService
     public function sendText($mobile, $text)
     {
 
-        return Http::get("https://api.kavenegar.com/v1/766E333435704B712F6D626858324876395A396A79574F58584669374C4E7450634F613364505A4A6D2F453D/sms/send.json", [
+        return Http::get("https://api.kavenegar.com/v1/5162483163722B5A7A693149656671374735554F30635337577A573247455244515576565A624E435051733D/sms/send.json", [
             'receptor' => $mobile,
             'message' => $text,
             'sender' => '1000066006700'
