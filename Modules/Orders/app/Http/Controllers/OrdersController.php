@@ -19,15 +19,23 @@ use Modules\Orders\Http\Requests\OrderStoreRequest;
 use Modules\Orders\Http\Requests\OrderUpdateRequest;
 use Modules\Orders\Models\Order;
 use Modules\Orders\Services\PaymentService;
+use Modules\Payment\Services\PaymentCompletionService;
 use Modules\Products\Models\ProductVariant;
 use Modules\Shipping\Models\Shipping;
 use Modules\Shipping\Services\ShippingService;
 use Modules\Users\Models\User;
 use Modules\Wallet\Models\Wallet;
+use Modules\Wallet\Services\WalletService;
 
 class OrdersController extends Controller
 {
-
+    public function __construct(
+        protected PaymentService $paymentService,
+        protected WalletService $walletService,
+        protected PaymentCompletionService $paymentCompletionService,
+        protected NotificationService $notifications,
+        protected SmsService $smsService,
+    ) {}
 
     /**
      * لیست سفارش‌ها
@@ -284,46 +292,26 @@ class OrdersController extends Controller
             'data'    => $orders
         ]);
     }
-    public function checkout(Request $request, NotificationService $notifications)
-    {
+    public function checkout(
+        Request $request,
+    ) {
         $user = $request->user();
 
+        // 1. اعتبارسنجی اولیه درخواست
         $request->validate([
-            'address_id'           => 'required|exists:addresses,id',
-            'shipping_id'   => 'required|exists:shippings,id',
-            'payment_method'       => 'required|in:wallet,online,hybrid',
-            'coupon_code'          => 'nullable|string',
-            'reservation_type'     => 'nullable|in:three_days,seven_days',
-            'parent_order_id'      => 'nullable|exists:orders,id', // برای اضافه کردن به رزرو قبلی
-            'gateway' => 'required_if:payment_method,online,hybrid|nullable|in:zarinpal,payir,saman', // اضافه شد
-
+            'address_id'        => 'required|exists:addresses,id',
+            'shipping_id' => 'required|exists:shippings,id',
+            'payment_method'    => 'required|in:wallet,online',
+            'gateway' => 'required_if:payment_method,online|string',
+            'coupon_code'       => 'nullable|string',
         ]);
 
-        // 1. اگر parent_order_id وجود دارد، بررسی کنیم که معتبر باشد
-        $parentOrder = null;
-        if ($request->parent_order_id) {
-            $parentOrder = Order::where('id', $request->parent_order_id)
-                ->where('user_id', $user->id)
-                ->where('status', OrderStatus::RESERVED->value)
-                ->where('reserved_until', '>', now())
-                ->first();
-
-            if (!$parentOrder) {
-                return response()->json(['message' => 'سفارش رزرو شده معتبری برای اضافه کردن وجود ندارد'], 422);
-            }
-
-            // بررسی می‌کنیم آدرس یکسان باشد
-            if ($parentOrder->address_id != $request->address_id) {
-                return response()->json(['message' => 'آدرس سفارش جدید باید با سفارش رزرو شده یکسان باشد'], 422);
-            }
-        }
-
-        // 2. بارگذاری آدرس
+        // 2. بارگذاری آدرس انتخابی کاربر
         $address = Address::with(['city', 'province'])
             ->where('user_id', $user->id)
             ->findOrFail($request->address_id);
 
-        // 3. سبد خرید
+        // 3. گرفتن سبد خرید کاربر
         $cartItems = Cart::with(['variant', 'variant.product'])
             ->where('user_id', $user->id)
             ->get();
@@ -332,16 +320,17 @@ class OrdersController extends Controller
             return response()->json(['message' => 'سبد خرید خالی است'], 422);
         }
 
-        // 4. محاسبات اولیه
-        $subtotal = $cartItems->sum(fn($item) => $item->price * $item->quantity);
-        $totalQuantity = $cartItems->sum('quantity');
-        $totalWeight = $cartItems->sum(fn($item) => ($item->variant->weight ?? 0) * $item->quantity);
+        // 4. جمع زدن subtotal
+        $subtotal = $cartItems->sum(fn($item) => $item->price_final * $item->quantity);
 
-        // 5. تخفیف
+        // 5. بررسی و محاسبه تخفیف با CouponService
         $discountAmount = 0;
         $coupon = null;
+
         if ($request->filled('coupon_code')) {
-            $couponResult = (new CouponService)->validateAndCalculate($request->coupon_code, $subtotal, $user->id);
+            $couponResult = (new CouponService)
+                ->validateAndCalculate($request->coupon_code, $subtotal, $user->id);
+
             if (!$couponResult['success']) {
                 return response()->json(['message' => $couponResult['message']], 422);
             }
@@ -349,32 +338,19 @@ class OrdersController extends Controller
             $coupon = $couponResult['coupon'];
         }
 
-        // 6. هزینه حمل
-        $shipping = Shipping::findOrFail($request->shipping_id);
+        // 6. محاسبه هزینه حمل و نقل
+        $shippingMethod = Shipping::findOrFail($request->shipping_id);
         $shippingCost = (new ShippingService)->calculateCost(
             $request->shipping_id,
             $address->province_id,
             $address->city_id,
-            $subtotal,
-            $totalQuantity,
-            $totalWeight
+            $subtotal
         );
 
-        if ($shippingCost === 0 && $shipping->status) {
-            return response()->json(['message' => 'روش حمل انتخابی معتبر نیست'], 422);
-        }
-
-        // 7. جمع کل
+        // 7. جمع نهایی
         $total = $subtotal - $discountAmount + $shippingCost;
 
-        // 8. بررسی موجودی محصولات (قبل از هر چیزی)
-        foreach ($cartItems as $item) {
-            if ($item->variant->stock < $item->quantity) {
-                return response()->json(['message' => "موجودی {$item->variant->product->title} کافی نیست"], 422);
-            }
-        }
-
-        // 9. محاسبه پرداخت از کیف پول
+        // 8. بررسی موجودی کیف پول
         $walletBalance = $user->wallet?->balance ?? 0;
         $fromWallet = 0;
         $toPayOnline = $total;
@@ -384,39 +360,21 @@ class OrdersController extends Controller
                 $fromWallet = $total;
                 $toPayOnline = 0;
             } else {
-                return response()->json([
-                    'message' => "موجودی کیف پول کافی نیست. موجودی: {$walletBalance} تومان",
-                    'wallet_balance' => $walletBalance
-                ], 422);
-            }
-        } elseif ($request->payment_method === 'hybrid') {
-            if ($walletBalance > 0) {
-                $fromWallet = min($walletBalance, $total);
-                $toPayOnline = $total - $fromWallet;
+                $fromWallet = $walletBalance;
+                $toPayOnline = $total - $walletBalance;
             }
         }
 
-        // 10. تعیین وضعیت نهایی بر اساس نوع سفارش
-        $isReservation = null;
-        if (!$parentOrder) {
-            $isReservation = $request->reservation_type && $request->reservation_type !== 'none';
+        // 9. بررسی موجودی محصولات
+        foreach ($cartItems as $item) {
+            if ($item->variant->stock < $item->quantity) {
+                return response()->json(['message' => "موجودی {$item->variant->product->title} کافی نیست"], 422);
+            }
         }
 
-        $reservedUntil = null;
-        $finalStatus = OrderStatus::PROCESSING->value;
-
-        if ($isReservation) {
-            $days = $request->reservation_type === 'three_days' ? 3 : 7;
-            $reservedUntil = now()->addDays($days);
-            $finalStatus = OrderStatus::RESERVED->value;
-        } else {
-            // سفارش عادی: اگر پرداخت کامل شد processing، وگرنه pending
-            $finalStatus = ($toPayOnline == 0) ? OrderStatus::PROCESSING->value : OrderStatus::PENDING->value;
-        }
-
-        // 11. تراکنش اصلی
+        // 10. ایجاد سفارش و تراکنش‌ها
         return DB::transaction(function () use (
-            $notifications,
+
             $user,
             $cartItems,
             $subtotal,
@@ -427,130 +385,99 @@ class OrdersController extends Controller
             $toPayOnline,
             $request,
             $coupon,
-            $shipping,
-            $address,
-            $finalStatus,
-            $isReservation,
-            $reservedUntil,
-            $parentOrder,
-            $walletBalance
+            $shippingMethod,
+            $address
         ) {
-            // ایجاد سفارش
             $order = Order::create([
-                'user_id'            => $user->id,
-                'address_id'         => $address->id,
-                'shipping_id' => $shipping->id,
-                'subtotal'           => $subtotal,
-                'discount_amount'    => $discountAmount,
-                'shipping_cost'      => $shippingCost,
-                'total'              => $total,
-                'payment_method'     => $request->payment_method,
-                'payment_status'     => $toPayOnline > 0 ? 'pending' : 'paid',
-                'status'             => $finalStatus,
-                'reservation_type'   => $isReservation ? $request->reservation_type : 'none',
-                'reserved_until'     => $reservedUntil,
-                'wallet_payment'     => $fromWallet,
-                'online_payment'     => $toPayOnline,
-                'parent_order_id'    => $parentOrder?->id,
+                'user_id' => $user->id,
+                'address_id' => $address->id,
+                'shipping_id' => $shippingMethod->id,
+                'subtotal' => $subtotal,
+                'discount_amount' => $discountAmount,
+                'shipping_cost' => $shippingCost,
+                'total' => $total,
+                'payment_method' => $request->payment_method,
+                'payment_status' => $toPayOnline > 0 ? 'pending' : 'paid',
+                'status' => $toPayOnline > 0 ? 'pending' :  'paid',
             ]);
 
-            // ثبت آیتم‌ها و کاهش موجودی
+            // 11. ثبت آیتم‌ها و کم کردن موجودی
             foreach ($cartItems as $item) {
                 $order->items()->create([
-                    'product_id'          => $item->variant->product_id,
-                    'product_variant_id'  => $item->variant->id,
-                    'quantity'            => $item->quantity,
-                    'price'               => $item->price,
+                    'product_id' => $item->variant->product_id,
+                    'product_variant_id' => $item->variant->id,
+                    'quantity' => $item->quantity,
+                    'price' => $item->price_final,
                 ]);
                 $item->variant->decrement('stock', $item->quantity);
             }
-            // اعمال کوپن
+
+            // 12. اعمال کوپن
             if ($coupon) {
-                (new CouponService)->applyCoupon($coupon, $user->id);
+                (new CouponService)
+                    ->applyCoupon($coupon, $user->id);
                 $order->coupon_id = $coupon->id;
                 $order->save();
             }
 
-            // پرداخت از کیف پول (هم برای رزرو و هم عادی)
+            // 13. پرداخت از کیف پول
             if ($fromWallet > 0) {
-                $user->wallet->update(['balance' => $walletBalance - $fromWallet]);
-                $user->wallet->transactions()->create([
-                    'type'        => 'debit',
-                    'amount'      => $fromWallet,
-                    'description' => "پرداخت برای سفارش #{$order->id}" . ($isReservation ? " (رزرو)" : ""),
-                    'order_id'    => $order->id,
-                ]);
+
+                $this->walletService->withdraw(
+                    wallet: $user->wallet,
+                    amount: $fromWallet,
+                    description: "پرداخت سفارش #{$order->id}",
+                    order: $order,
+                );
             }
 
-            // پاک کردن سبد خرید
+            // 14. پاک کردن سبد خرید
             Cart::where('user_id', $user->id)->delete();
 
-            // پرداخت آنلاین
+            // 15. اگر پرداخت آنلاین نیاز است → درگاه 
             if ($toPayOnline > 0) {
-                $gateway = $request->get('gateway', config('payment.default', 'zarinpal'));
 
-                $transaction = GatewayTransaction::create([
-                    'order_id' => $order->id,
-                    'user_id'  => $user->id,
-                    'amount'   => $toPayOnline,
-                    'gateway' => $gateway,
-                    'status'   => 'pending',
-                ]);
-                // درخواست به درگاه پرداخت
-                $paymentService = new PaymentService();
-                $paymentResult = $paymentService->requestPayment($order, $gateway, [
-                    'transaction_id' => $transaction->id,
-                    'callback_url' => route('gateway.callback.show', $transaction->id)
-                ]);
+                $gateway = $request->gateway ?? config('payment.default');
 
-                if (!$paymentResult['success']) {
-                    // اگر درگاه خطا داد، سفارش رو حذف کن
-                    DB::rollBack();
-                    return response()->json([
-                        'message' => 'خطا در اتصال به درگاه پرداخت',
-                        'error' => $paymentResult['message'] ?? 'Unknown error'
-                    ], 500);
-                }
-                $notifications->create(
+                $gatewayUrl = $this->paymentService->pay(
+
+                    payable: $order,
+
+                    user: $user,
+
+                    amount: $toPayOnline,
+
+                    gateway: $gateway,
+
+                );
+
+                $this->notifications->create(
                     "سفارش در انتظار پرداخت",
-                    "مبلغ {$toPayOnline} تومان باقی مانده است" . ($isReservation ? " - سفارش رزرو خواهد شد" : ""),
+                    "یک سفارش برای پرداخت به درگاه منتقل شد",
                     "notification_order",
-                    ['order' => $order->id]
+                    [
+                        'order' => $order->id,
+                    ]
                 );
 
                 return response()->json([
-                    'order'        => $order->load('items'),
-                    'payment_info' => [
-                        'from_wallet'    => $fromWallet,
-                        'to_pay_online'  => $toPayOnline,
-                        'transaction_id' => $transaction->id,
-                        'gateway' => $gateway,
-                        'gateway_url' => $paymentResult['payment_url'], // لینک واقعی درگاه
-                    ],
-                    'is_reservation' => $isReservation,
-                    'reserved_until' => $reservedUntil,
+
+                    'order' => $order->load('items'),
+                    'status' => 'gateway',
+                    'gateway_url' => $gatewayUrl,
+
                 ], 201);
             }
-
-            // سفارش بدون نیاز به پرداخت آنلاین
-            $message = $isReservation
-                ? "سفارش با موفقیت رزرو شد و تا {$reservedUntil->format('Y-m-d H:i')} فرصت اضافه کردن سفارش جدید دارید"
-                : "سفارش با موفقیت ثبت و پرداخت شد";
-
-            $notifications->create(
-                $isReservation ? "سفارش رزرو شد" : "سفارش تکمیل شد",
-                $message,
-                "notification_order",
-                ['order' => $order->id]
+            $this->paymentCompletionService->completeWalletOrder(
+                $order
             );
-            $smsService = new SmsService();
-            $smsService->sendToKavenegar('customer-order', $user->mobile, $order->id, ['token20' => $user->getDisplayName($address->receiver_name)]);
-            $smsService->sendToAdmins('customer-order-admin', $order->id);
+
             return response()->json([
-                'order'   => $order->load('items'),
-                'message' => $message,
-                'is_reservation' => $isReservation,
-                'reserved_until' => $reservedUntil,
+
+                'order' => $order->load('items'),
+                'status' => 'wallet',
+                'message' => 'سفارش با موفقیت ثبت شد.',
+
             ], 201);
         });
     }
