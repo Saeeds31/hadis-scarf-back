@@ -65,7 +65,7 @@ class OrdersController extends Controller
         $data = $request->validate([
             'user_id'            => 'required|exists:users,id',
             'address_id'         => 'required|exists:addresses,id',
-            'shipping_method_id' => 'required|exists:shippings,id',
+            'shipping_id' => 'required|exists:shippings,id',
             'subtotal'           => 'required|numeric|min:0',
             'discount_amount'    => 'nullable|numeric|min:0',
             'shipping_cost'      => 'nullable|numeric|min:0',
@@ -107,7 +107,7 @@ class OrdersController extends Controller
         $data = $request->validate([
             'user_id'            => 'sometimes|exists:users,id',
             'address_id'         => 'sometimes|exists:addresses,id',
-            'shipping_method_id' => 'sometimes|exists:shippings,id',
+            'shipping_id' => 'sometimes|exists:shippings,id',
             'subtotal'           => 'sometimes|numeric|min:0',
             'discount_amount'    => 'nullable|numeric|min:0',
             'shipping_cost'      => 'nullable|numeric|min:0',
@@ -143,7 +143,7 @@ class OrdersController extends Controller
         $data = $request->validate([
             'user_id'            => 'required|exists:users,id',
             'address_id'         => 'required|exists:addresses,id',
-            'shipping_method_id' => 'required|exists:shippings,id',
+            'shipping_id' => 'required|exists:shippings,id',
             'subtotal'           => 'required|numeric|min:0',
             'discount_amount'    => 'nullable|numeric|min:0',
             'shipping_cost'      => 'nullable|numeric|min:0',
@@ -181,7 +181,7 @@ class OrdersController extends Controller
             $order = Order::create([
                 'user_id'            => $data['user_id'],
                 'address_id'         => $data['address_id'],
-                'shipping_id' => $data['shipping_method_id'],
+                'shipping_id' => $data['shipping_id'],
                 'subtotal'           => $data['subtotal'],
                 'discount_amount'    => $data['discount_amount'] ?? 0,
                 'shipping_cost'      => $data['shipping_cost'] ?? 0,
@@ -293,7 +293,7 @@ class OrdersController extends Controller
         // 1. اعتبارسنجی اولیه درخواست
         $request->validate([
             'address_id'        => 'required|exists:addresses,id',
-            'shipping_method_id' => 'required|exists:shippings,id',
+            'shipping_id' => 'required|exists:shippings,id',
             'payment_method'    => 'required|in:wallet,online',
             'gateway' => 'required_if:payment_method,online|string',
             'coupon_code'       => 'nullable|string',
@@ -332,9 +332,9 @@ class OrdersController extends Controller
         }
 
         // 6. محاسبه هزینه حمل و نقل
-        $shippingMethod = Shipping::findOrFail($request->shipping_method_id);
+        $shippingMethod = Shipping::findOrFail($request->shipping_id);
         $shippingCost = (new ShippingService)->calculateCost(
-            $request->shipping_method_id,
+            $request->shipping_id,
             $address->province_id,
             $address->city_id,
             $subtotal
@@ -541,7 +541,7 @@ class OrdersController extends Controller
         // --------------------------------------------------------
         // 4) محاسبه هزینه حمل
         // --------------------------------------------------------
-        $shipping = Shipping::find($request->shipping_method_id);
+        $shipping = Shipping::find($request->shipping_id);
 
         if (!$shipping) {
             return response()->json([
@@ -551,7 +551,7 @@ class OrdersController extends Controller
         }
 
         $shippingCost = (new ShippingService)->calculateCost(
-            $request->shipping_method_id,
+            $request->shipping_id,
             $address->province_id,
             $address->city_id,
             $subtotal

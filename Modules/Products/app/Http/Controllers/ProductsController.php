@@ -341,7 +341,7 @@ class ProductsController extends Controller
                 if (!isset($attributesById[$attr->id])) {
                     $attributesById[$attr->id] = [
                         'id' => $attr->id,
-                        'title' => $attr->name,
+                        'name' => $attr->name,
                         'values' => []
                     ];
                     $attributeOrder[] = $attr->id;
