@@ -13,6 +13,8 @@ Route::middleware(['auth:sanctum'])->prefix('v1/admin')->group(function () {
 Route::middleware(['auth:sanctum'])->prefix('v1/front')->group(function () {
     Route::post('/articles/{id}/comments', [CommentsController::class, 'storeArticle']);
     Route::post('/products/{id}/comments', [CommentsController::class, 'storeProducts']);
-    Route::get('/products/{id}/comments', [CommentsController::class, 'indexProducts']);
     Route::get('/articles/{id}/comments', [CommentsController::class, 'indexArticles']);
+});
+Route::prefix('v1/front')->group(function () {
+    Route::get('/products/{id}/comments', [CommentsController::class, 'indexProducts']);
 });

@@ -406,6 +406,15 @@ class ProductsController extends Controller
         } else {
             $isInWishList = false;
         }
+        // محاسبه تخفیف
+        $discount = null;
+        if ($product->discount_value > 0) {
+            if ($product->discount_type === 'percent') {
+                $discount = round(($product->price * $product->discount_value) / 100, 2);
+            } elseif ($product->discount_type === 'fixed') {
+                $discount = $product->discount_value;
+            }
+        }
         return response()->json([
             'success' => true,
             'data' => [
@@ -413,6 +422,7 @@ class ProductsController extends Controller
                 'product' => [
                     'id' => $product->id,
                     'title' => $product->title,
+                    'discount' => $discount,
                     'description' => $product->description,
                     'price' => $product->price,
                     'images' => $product->images,
