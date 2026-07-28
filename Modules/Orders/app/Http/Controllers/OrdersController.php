@@ -616,7 +616,7 @@ class OrdersController extends Controller
     {
         $user = $request->user();
 
-        $query = Order::with(['items', 'address', 'shipping'])
+        $query = Order::with(['items.product', 'address', 'shipping'])
             ->where('user_id', $user->id);
 
         // فیلتر وضعیت سفارش
@@ -655,8 +655,10 @@ class OrdersController extends Controller
 
         // پیدا کردن سفارش با تمام روابط
         $order = Order::with([
-            'items',
-            'address',
+            'items.product',
+            'items.variant.values.attribute',
+            'address.province',
+            'address.city',
             'shipping',
             'user',
         ])->where('id', $orderId)

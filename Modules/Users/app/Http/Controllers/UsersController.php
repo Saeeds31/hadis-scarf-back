@@ -53,7 +53,7 @@ class UsersController extends Controller
     // لیست کاربران
     public function userProfile(Request $request)
     {
-        $user = $request->user();
+        $user = $request->user()->load('wallet');
         return response()->json([
             'user' => $user,
             'message' => 'اطلاعات کاربر'
