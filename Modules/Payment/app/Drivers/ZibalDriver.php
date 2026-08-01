@@ -9,6 +9,7 @@ use Modules\Gateway\Models\GatewayTransaction;
 use Modules\Payment\Contracts\GatewayInterface;
 use Modules\Payment\Exceptions\PaymentFailedException;
 use Modules\Payment\Services\MoneyService;
+use Modules\Wallet\Models\Wallet;
 
 class ZibalDriver implements GatewayInterface
 {
@@ -53,36 +54,33 @@ class ZibalDriver implements GatewayInterface
     public function pay(
         GatewayTransaction $transaction
     ): string {
+        // تعیین Callback URL بر اساس نوع Payable
+        $callbackRoute = 'payment.callback'; // پیش‌فرض برای سفارش
+
+        // اگر payable کیف پول باشد
+        if ($transaction->payable_type === 'wallet' || $transaction->payable_type === Wallet::class) {
+            $callbackRoute = 'payment.wallet-callback';
+        }
+
         $response = Http::acceptJson()
             ->post($this->requestUrl, [
-
                 'merchant' => $this->merchant,
-
                 'amount' => $this->money->tomanToRial($transaction->amount),
-                'callbackUrl' => route(
-                    'payment.callback',
-                    $transaction->gateway
-                ),
-
+                'callbackUrl' => route($callbackRoute, $transaction->gateway),
                 'orderId' => $transaction->id,
-
             ])
             ->throw()
             ->json();
 
         if (($response['result'] ?? -1) != 100) {
-
             throw new \RuntimeException(
                 $response['message'] ?? 'خطا در اتصال به درگاه.'
             );
         }
-       
+
         $transaction->update([
-
             'authority' => $response['trackId'],
-
             'request_data' => $response,
-
         ]);
 
         return "https://gateway.zibal.ir/start/{$response['trackId']}";
