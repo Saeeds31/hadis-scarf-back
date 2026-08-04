@@ -5,11 +5,17 @@ namespace Modules\Cart\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Modules\Cart\Models\Cart;
+use Modules\Club\Services\ClubService;
 use Modules\Products\Models\Product;
 use Modules\Products\Models\ProductVariant;
 
 class CartController extends Controller
 {
+
+    public function __construct(
+        protected ClubService $clubService
+    ) {}
+
     /**
      * لیست سبد خرید
      */
@@ -93,6 +99,8 @@ class CartController extends Controller
             $subtotal += $line_final_total;
             $product_discount_total += $line_discount;
         }
+        $club_volume_discount = $this->clubService->calculateVolumeDiscount($items, $subtotal);
+        $finalTotal = $subtotal - $club_volume_discount['discount_amount'];
 
         return response()->json([
             'success' => true,
@@ -121,7 +129,8 @@ class CartController extends Controller
             }),
             'price_changes' => $price_changes,
             'summary' => [
-                'subtotal' => (int)$subtotal,
+                'subtotal' => (int)$finalTotal,
+                'club_volume_discount' => (int)$finalTotal,
                 'product_discount_total' => (int)$product_discount_total,
                 'total_payable' => (int)$subtotal, // اینجا فقط محصولات؛ هزینه حمل و کپن در متد checkoutSummary اضافه می‌شود
             ],
