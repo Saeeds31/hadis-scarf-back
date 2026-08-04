@@ -28,5 +28,6 @@
     "Gateway": true,
     "Notifications": true,
     "Story": true,
-    "Payment": true
+    "Payment": true,
+    "Club": true
 }

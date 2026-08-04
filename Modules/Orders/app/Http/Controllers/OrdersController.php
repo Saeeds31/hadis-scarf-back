@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Modules\Addresses\Models\Address;
 use Modules\Cart\Models\Cart;
+use Modules\Club\Services\ClubService;
 use Modules\Coupons\Models\Coupon;
 use Modules\Coupons\Services\CouponService;
 use Modules\Gateway\Models\GatewayTransaction;
@@ -34,6 +35,7 @@ class OrdersController extends Controller
         protected PaymentCompletionService $paymentCompletionService,
         protected NotificationService $notifications,
         protected SmsService $smsService,
+        protected ClubService $clubService
     ) {}
 
     /**
@@ -381,14 +383,18 @@ class OrdersController extends Controller
             $shippingMethod,
             $address
         ) {
+            $club_volume_discount = $this->clubService->calculateVolumeDiscount($cartItems, $total);
+
+            $finalTotal=$total-$club_volume_discount['discount_amount'];
             $order = Order::create([
                 'user_id' => $user->id,
+                'club_volume_discount'=>$club_volume_discount['discount_amount'],
                 'address_id' => $address->id,
                 'shipping_id' => $shippingMethod->id,
                 'subtotal' => $subtotal,
                 'discount_amount' => $discountAmount,
                 'shipping_cost' => $shippingCost,
-                'total' => $total,
+                'total' => $finalTotal,
                 'payment_method' => $request->payment_method,
                 'payment_status' => $toPayOnline > 0 ? 'pending' : 'paid',
                 'status' => $toPayOnline > 0 ? 'pending' :  'paid',
@@ -590,13 +596,17 @@ class OrdersController extends Controller
         // --------------------------------------------------------
         // 6) مبلغ پرداختی
         // --------------------------------------------------------
-        $payable = max(0, $subtotal - $productDiscount - $couponDiscount + $shippingCost);
+        $payable_before_discount_volume = max(0, $subtotal - $productDiscount - $couponDiscount + $shippingCost);
+
+        $club_volume_discount = $this->clubService->calculateVolumeDiscount($cartItems, $payable_before_discount_volume);
+        $payable = max(0, $subtotal - $productDiscount - $couponDiscount + $shippingCost - $club_volume_discount['discount_amount']);
 
         return response()->json([
             'success' => true,
 
             'summary' => [
                 'subtotal'          => (int)$subtotal,
+                'club_volume_discount'          => (int)$club_volume_discount,
                 'product_discount'  => (int)$productDiscount,
                 'shipping_cost'     => (int)$shippingCost,
                 'coupon_discount'   => (int)$couponDiscount,

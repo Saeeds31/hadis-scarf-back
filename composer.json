@@ -40,6 +40,7 @@
             "Modules\\Contact\\": "Modules/Contact/app/",
             "Modules\\Products\\": "Modules/Products/app/",
             "Modules\\Gateway\\": "Modules/Gateway/app/",
+            "Modules\\Club\\": "Modules/Club/app/",
             "Modules\\Notifications\\": "Modules/Notifications/app/",
             "Modules\\Specifications\\": "Modules/Specifications/app/",
             "Modules\\Reports\\": "Modules/Reports/app/",
