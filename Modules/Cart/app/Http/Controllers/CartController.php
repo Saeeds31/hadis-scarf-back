@@ -130,7 +130,7 @@ class CartController extends Controller
             'price_changes' => $price_changes,
             'summary' => [
                 'subtotal' => (int)$finalTotal,
-                'club_volume_discount' => (int)$finalTotal,
+                'club_volume_discount' => (int)$club_volume_discount,
                 'product_discount_total' => (int)$product_discount_total,
                 'total_payable' => (int)$subtotal, // اینجا فقط محصولات؛ هزینه حمل و کپن در متد checkoutSummary اضافه می‌شود
             ],
