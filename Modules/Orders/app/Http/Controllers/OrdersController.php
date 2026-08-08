@@ -287,6 +287,28 @@ class OrdersController extends Controller
             'data'    => $orders
         ]);
     }
+    public function getPrintData(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer|exists:orders,id'
+        ]);
+
+        $orders = Order::with([
+            'user',
+            'address.province',
+            'address.city',
+            'shipping',
+            'items.product',
+            'items.variant.values'
+        ])->whereIn('id', $request->ids)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders
+        ]);
+    }
     public function checkout(
         Request $request,
     ) {
@@ -344,6 +366,9 @@ class OrdersController extends Controller
 
         // 7. جمع نهایی
         $total = $subtotal - $discountAmount + $shippingCost;
+        $club_volume_discount = $this->clubService->calculateVolumeDiscount($cartItems, $total);
+
+        $total = $total - $club_volume_discount['discount_amount'];
 
         // 8. بررسی موجودی کیف پول
         $walletBalance = $user->wallet?->balance ?? 0;
@@ -381,20 +406,18 @@ class OrdersController extends Controller
             $request,
             $coupon,
             $shippingMethod,
-            $address
+            $address,
+            $club_volume_discount
         ) {
-            $club_volume_discount = $this->clubService->calculateVolumeDiscount($cartItems, $total);
-
-            $finalTotal=$total-$club_volume_discount['discount_amount'];
             $order = Order::create([
                 'user_id' => $user->id,
-                'club_volume_discount'=>$club_volume_discount['discount_amount'],
+                'club_volume_discount' => $club_volume_discount['discount_amount'],
                 'address_id' => $address->id,
                 'shipping_id' => $shippingMethod->id,
                 'subtotal' => $subtotal,
                 'discount_amount' => $discountAmount,
                 'shipping_cost' => $shippingCost,
-                'total' => $finalTotal,
+                'total' => $total,
                 'payment_method' => $request->payment_method,
                 'payment_status' => $toPayOnline > 0 ? 'pending' : 'paid',
                 'status' => $toPayOnline > 0 ? 'pending' :  'paid',
@@ -606,7 +629,7 @@ class OrdersController extends Controller
 
             'summary' => [
                 'subtotal'          => (int)$subtotal,
-                'club_volume_discount'          => (int)$club_volume_discount,
+                'club_volume_discount'          => (int)$club_volume_discount['discount_amount'],
                 'product_discount'  => (int)$productDiscount,
                 'shipping_cost'     => (int)$shippingCost,
                 'coupon_discount'   => (int)$couponDiscount,

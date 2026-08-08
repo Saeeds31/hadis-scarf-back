@@ -129,10 +129,10 @@ class CartController extends Controller
             }),
             'price_changes' => $price_changes,
             'summary' => [
-                'subtotal' => (int)$finalTotal,
+                'subtotal' => (int)$subtotal,
                 'club_volume_discount' => (int)$club_volume_discount['discount_amount'],
                 'product_discount_total' => (int)$product_discount_total,
-                'total_payable' => (int)$subtotal, // اینجا فقط محصولات؛ هزینه حمل و کپن در متد checkoutSummary اضافه می‌شود
+                'total_payable' => (int)$finalTotal, // اینجا فقط محصولات؛ هزینه حمل و کپن در متد checkoutSummary اضافه می‌شود
             ],
         ]);
     }
