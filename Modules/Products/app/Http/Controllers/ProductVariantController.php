@@ -10,9 +10,13 @@ use Modules\Products\Http\Requests\ProductVariantStoreRequest;
 use Modules\Products\Http\Requests\ProductVariantUpdateRequest;
 use Modules\Products\Models\Product;
 use Modules\Products\Models\ProductVariant;
+use Modules\Products\Services\ProductStockService;
 
 class ProductVariantController extends Controller
 {
+    public function __construct(
+        protected ProductStockService $productStockService,
+    ) {}
     // لیست واریانت‌های یک محصول
     public function index($id)
     {
@@ -42,6 +46,8 @@ class ProductVariantController extends Controller
             "notification_product",
             ['product' => $product->id, 'variant' => $variant->id]
         );
+        $this->productStockService->sync($product);
+
         return response()->json($variants);
     }
 
@@ -75,6 +81,7 @@ class ProductVariantController extends Controller
             "notification_product",
             ['product' => $product->id, 'variant' => $variant->id]
         );
+        $this->productStockService->sync($product);
         return response()->json($variant->load('values'));
     }
 
@@ -89,7 +96,7 @@ class ProductVariantController extends Controller
             return response()->json([
                 'message' => 'برای این تنوع یک سفارش ثبت شده و قابل حذف نیست',
                 'success' => false
-            ],403);
+            ], 403);
         }
         $notifications->create(
             "حذف تنوع محصول",
@@ -151,6 +158,7 @@ class ProductVariantController extends Controller
             "notification_product",
             ['product' => $product->id]
         );
+        $this->productStockService->sync($product);
         return response()->json($variants);
     }
 }

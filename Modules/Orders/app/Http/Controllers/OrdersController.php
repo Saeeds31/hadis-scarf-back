@@ -21,6 +21,7 @@ use Modules\Orders\Models\Order;
 use Modules\Payment\Services\PaymentCompletionService;
 use Modules\Payment\Services\PaymentService;
 use Modules\Products\Models\ProductVariant;
+use Modules\Products\Services\ProductStockService;
 use Modules\Shipping\Models\Shipping;
 use Modules\Shipping\Services\ShippingService;
 use Modules\Users\Models\User;
@@ -33,6 +34,7 @@ class OrdersController extends Controller
         protected PaymentService $paymentService,
         protected WalletService $walletService,
         protected PaymentCompletionService $paymentCompletionService,
+        protected ProductStockService $productStockService,
         protected NotificationService $notifications,
         protected SmsService $smsService,
         protected ClubService $clubService
@@ -195,7 +197,7 @@ class OrdersController extends Controller
 
             // 4. ثبت آیتم‌ها + کم کردن موجودی
             foreach ($data['items'] as $item) {
-                $variant = ProductVariant::findOrFail($item['product_variant_id']);
+                $variant = ProductVariant::with(['product'])->findOrFail($item['product_variant_id']);
 
                 $order->items()->create([
                     'product_id'         => $item['product_id'],
@@ -206,6 +208,7 @@ class OrdersController extends Controller
 
                 // کم کردن موجودی
                 $variant->decrement('stock', $item['quantity']);
+                $this->productStockService->sync($variant->product);
             }
             // 5. کم کردن موجودی کیف پول
             $user->wallet()->update([
@@ -250,6 +253,7 @@ class OrdersController extends Controller
                     $variant = $item->variant;
                     if ($variant) {
                         $variant->increment('stock', $item->quantity);
+                        $this->productStockService->sync($variant->product);
                     }
                 }
             }
@@ -300,7 +304,7 @@ class OrdersController extends Controller
             'address.city',
             'shipping',
             'items.product',
-            'items.variant.values'
+            'items.variant.values.attribute'
         ])->whereIn('id', $request->ids)
             ->get();
 
@@ -432,6 +436,7 @@ class OrdersController extends Controller
                     'price' => $item->price_final,
                 ]);
                 $item->variant->decrement('stock', $item->quantity);
+                $this->productStockService->sync($item->variant->product);
             }
 
             // 12. اعمال کوپن

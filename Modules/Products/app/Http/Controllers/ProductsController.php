@@ -13,10 +13,14 @@ use Modules\Products\Http\Requests\ProductUpdateRequest;
 use Modules\Products\Http\Resources\ProductCardResource;
 use Modules\Products\Models\Product;
 use Modules\Products\Models\ProductVariant;
+use Modules\Products\Services\ProductStockService;
 use Modules\Wishlist\Models\Wishlist;
 
 class ProductsController extends Controller
 {
+    public function __construct(
+        protected ProductStockService $productStockService,
+    ) {}
     // لیست محصولات
     public function index(Request $request)
     {
@@ -76,6 +80,7 @@ class ProductsController extends Controller
             "notification_product",
             ['product' => $product->id]
         );
+        $this->productStockService->sync($product);
         return response()->json($product->load('categories', 'images'));
     }
     // نمایش یک محصول
@@ -166,6 +171,7 @@ class ProductsController extends Controller
             "notification_product",
             ['product' => $product->id]
         );
+        $this->productStockService->sync($product);
         return response()->json($product->load('categories', 'images', 'variants'));
     }
 
@@ -222,7 +228,7 @@ class ProductsController extends Controller
     }
     public function frontIndex(Request $request)
     {
-        $query = Product::with(['categories', 'variants.values.attribute'])->where('status', "published")->latest(); // فقط فعال‌ها
+        $query = Product::with(['categories', 'variants.values.attribute'])->where('status','!=', "draft")->latest(); 
 
         if ($search = $request->get('search')) {
             $query->where(function ($q) use ($search) {
