@@ -24,22 +24,41 @@ class CartController extends Controller
         $user = $request->user();
         $variantIds = explode(',', $request->get('variant_ids', ''));
         $quantities = explode(',', $request->get('quantities', ''));
+
         foreach ($variantIds as $index => $variantId) {
             $qty = isset($quantities[$index]) ? (int)$quantities[$index] : 1;
+
             // بررسی وجود variant
             $variant = ProductVariant::find($variantId);
             if (!$variant) {
                 continue;
             }
+
             // پیدا کردن یا ساختن رکورد در cart
             $cartItem = Cart::firstOrNew([
                 'user_id'    => $request->user()->id,
                 'variant_id' => $variantId,
             ]);
 
+            // چک موجودی
+            $availableStock = (int)$variant->stock;
+            $alertMessage = null;
+
+            if ($qty > $availableStock) {
+                $alertMessage = "موجودی کافی نیست. حداکثر موجودی: {$availableStock}";
+                $qty = $availableStock; // تنظیم به حداکثر موجودی
+            }
+
+            // اگر موجودی صفر است، از سبد خرید حذف یا مقدار را صفر نگه دارید
+            if ($availableStock <= 0) {
+                $cartItem->delete();
+                continue;
+            }
+
             $cartItem->quantity = $qty;
             $cartItem->price_original = (int) $variant->price;
             $cartItem->price_final = $this->calculateFinalUnitPrice($variant->price, $variant->product);
+            $cartItem->alert_message = $alertMessage;
             $cartItem->save();
         }
 
@@ -48,8 +67,8 @@ class CartController extends Controller
             ->get();
 
         $price_changes = [];
-        $subtotal = 0; // جمع قیمت نهایی (price_final * qty)
-        $product_discount_total = 0; // مجموع تخفیف محصولات از روی اختلاف original - final
+        $subtotal = 0;
+        $product_discount_total = 0;
 
         foreach ($items as $item) {
             $variant = $item->variant;
@@ -87,6 +106,20 @@ class CartController extends Controller
                 }
             }
 
+            // چک موجودی برای آیتم‌های موجود در سبد
+            $availableStock = (int)$variant->stock;
+            $currentQuantity = (int)$item->quantity;
+
+            if ($currentQuantity > $availableStock) {
+                $item->alert_message = "موجودی کافی نیست. حداکثر موجودی: {$availableStock}";
+                $item->quantity = $availableStock > 0 ? $availableStock : 0;
+                $item->save();
+            } elseif ($availableStock > 0 && $item->alert_message) {
+                // اگر موجودی دوباره به مقدار کافی رسید، پیام هشدار را پاک کنید
+                $item->alert_message = null;
+                $item->save();
+            }
+
             // مقادیر ردیف را برای خروجی آماده می‌کنیم
             $line_original_total = (int)$item->price_original * (int)$item->quantity;
             $line_final_total = (int)$item->price_final * (int)$item->quantity;
@@ -99,6 +132,7 @@ class CartController extends Controller
             $subtotal += $line_final_total;
             $product_discount_total += $line_discount;
         }
+
         $club_volume_discount = $this->clubService->calculateVolumeDiscount($items, $subtotal);
         $finalTotal = $subtotal - $club_volume_discount['discount_amount'];
 
@@ -118,6 +152,7 @@ class CartController extends Controller
                     'line_original_total' => (int)$it->line_original_total,
                     'line_final_total' => (int)$it->line_final_total,
                     'line_discount' => (int)$it->line_discount,
+                    'alert_message' => $it->alert_message, // اضافه کردن هشدار به خروجی
                     'variant' => $it->variant ? [
                         'id' => $it->variant->id,
                         'sku' => $it->variant->sku ?? null,
@@ -132,7 +167,7 @@ class CartController extends Controller
                 'subtotal' => (int)$subtotal,
                 'club_volume_discount' => (int)$club_volume_discount['discount_amount'],
                 'product_discount_total' => (int)$product_discount_total,
-                'total_payable' => (int)$finalTotal, // اینجا فقط محصولات؛ هزینه حمل و کپن در متد checkoutSummary اضافه می‌شود
+                'total_payable' => (int)$finalTotal,
             ],
         ]);
     }
