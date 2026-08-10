@@ -28,28 +28,24 @@ class CartController extends Controller
         foreach ($variantIds as $index => $variantId) {
             $qty = isset($quantities[$index]) ? (int)$quantities[$index] : 1;
 
-            // بررسی وجود variant
             $variant = ProductVariant::find($variantId);
             if (!$variant) {
                 continue;
             }
 
-            // پیدا کردن یا ساختن رکورد در cart
             $cartItem = Cart::firstOrNew([
                 'user_id'    => $request->user()->id,
                 'variant_id' => $variantId,
             ]);
 
-            // چک موجودی
             $availableStock = (int)$variant->stock;
             $alertMessage = null;
 
             if ($qty > $availableStock) {
                 $alertMessage = "موجودی کافی نیست. حداکثر موجودی: {$availableStock}";
-                $qty = $availableStock; // تنظیم به حداکثر موجودی
+                $qty = $availableStock;
             }
 
-            // اگر موجودی صفر است، از سبد خرید حذف یا مقدار را صفر نگه دارید
             if ($availableStock <= 0) {
                 $cartItem->delete();
                 continue;
@@ -74,13 +70,9 @@ class CartController extends Controller
             $variant = $item->variant;
             $product = $variant->product;
 
-            // current base price from variant
             $current_base_price = (int) $variant->price;
-
-            // recalc final_unit_price based on product discount rules
             $final_unit_price = $this->calculateFinalUnitPrice($current_base_price, $product);
 
-            // اگر قیمت پایه‌ی ذخیره‌شده در کارت با قیمت فعلی variant فرق داشت -> گزارش و بروزرسانی
             if ((int)$item->price_original !== $current_base_price) {
                 $price_changes[] = [
                     'variant_id'  => $item->variant_id,
@@ -88,12 +80,10 @@ class CartController extends Controller
                     'new_price'   => $current_base_price,
                 ];
 
-                // آپدیت قیمت‌ها در سبد براساس قیمت جدید و تخفیف محصول
                 $item->price_original = $current_base_price;
                 $item->price_final = $final_unit_price;
                 $item->save();
             } else {
-                // ممکن است product discount تغییر کرده باشد — در اینجا هم sync می‌کنیم
                 if ((int)$item->price_final !== (int)$final_unit_price) {
                     $price_changes[] = [
                         'variant_id' => $item->variant_id,
@@ -111,14 +101,10 @@ class CartController extends Controller
             $currentQuantity = (int)$item->quantity;
 
             if ($currentQuantity > $availableStock) {
-                $item->alert_message = "موجودی کافی نیست. حداکثر موجودی: {$availableStock}";
                 $item->quantity = $availableStock > 0 ? $availableStock : 0;
                 $item->save();
-            } elseif ($availableStock > 0 && $item->alert_message) {
-                // اگر موجودی دوباره به مقدار کافی رسید، پیام هشدار را پاک کنید
-                $item->alert_message = null;
-                $item->save();
             }
+
 
             // مقادیر ردیف را برای خروجی آماده می‌کنیم
             $line_original_total = (int)$item->price_original * (int)$item->quantity;
@@ -142,22 +128,26 @@ class CartController extends Controller
                 return [
                     'id' => $it->id,
                     'variant_id' => $it->variant_id,
-                    'title' => $it->product->title,
-                    'product_id' => $it->product->id,
-                    'product_slug' => $it->product->slug,
-                    'image' => $it->product->main_image,
+                    'title' => $it->variant->product->title ?? null,
+                    'product_id' => $it->variant->product->id ?? null,
+                    'product_slug' => $it->variant->product->slug ?? null,
+                    'image' => $it->variant->product->main_image ?? null,
                     'quantity' => (int)$it->quantity,
                     'price_original' => (int)$it->price_original,
                     'price_final' => (int)$it->price_final,
                     'line_original_total' => (int)$it->line_original_total,
                     'line_final_total' => (int)$it->line_final_total,
                     'line_discount' => (int)$it->line_discount,
-                    'alert_message' => $it->alert_message, // اضافه کردن هشدار به خروجی
+                    'alert_message' => $it->alert_message,
                     'variant' => $it->variant ? [
                         'id' => $it->variant->id,
                         'sku' => $it->variant->sku ?? null,
                         'attributes' => $it->variant->values->map(function ($val) {
-                            return ['id' => $val->id, 'name' => $val->attribute->name, 'value' => $val->value,];
+                            return [
+                                'id' => $val->id,
+                                'name' => $val->attribute->name,
+                                'value' => $val->value,
+                            ];
                         })->toArray(),
                     ] : null,
                 ];
@@ -278,6 +268,7 @@ class CartController extends Controller
 
         $item->quantity = $request->quantity;
         $item->price_original = $basePrice;
+        $item->alert_message = null;
         $item->price_final = $finalUnitPrice;
         $item->save();
 
@@ -315,6 +306,7 @@ class CartController extends Controller
         $item->quantity += 1;
         $item->price_original = $basePrice;
         $item->price_final = $finalUnitPrice;
+        $item->alert_message = null;
         $item->save();
 
         return response()->json([
