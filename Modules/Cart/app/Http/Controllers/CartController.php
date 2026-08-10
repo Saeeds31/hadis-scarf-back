@@ -344,6 +344,8 @@ class CartController extends Controller
 
         $item->quantity -= 1;
         $item->price_original = $basePrice;
+        $item->alert_message = null;
+
         $item->price_final = $finalUnitPrice;
         $item->save();
 
