@@ -25,6 +25,7 @@ class CartController extends Controller
         $variantIds = explode(',', $request->get('variant_ids', ''));
         $quantities = explode(',', $request->get('quantities', ''));
 
+        // 1. پردازش آیتم‌های جدید
         foreach ($variantIds as $index => $variantId) {
             $qty = isset($quantities[$index]) ? (int)$quantities[$index] : 1;
 
@@ -34,21 +35,24 @@ class CartController extends Controller
             }
 
             $cartItem = Cart::firstOrNew([
-                'user_id'    => $request->user()->id,
+                'user_id' => $request->user()->id,
                 'variant_id' => $variantId,
             ]);
 
             $availableStock = (int)$variant->stock;
             $alertMessage = null;
 
+            // اگر موجودی صفر است، آیتم را حذف کن
+            if ($availableStock <= 0) {
+                if ($cartItem->exists) {
+                    $cartItem->delete();
+                }
+                continue;
+            }
+
             if ($qty > $availableStock) {
                 $alertMessage = "موجودی کافی نیست. حداکثر موجودی: {$availableStock}";
                 $qty = $availableStock;
-            }
-
-            if ($availableStock <= 0) {
-                $cartItem->delete();
-                continue;
             }
 
             $cartItem->quantity = $qty;
@@ -58,6 +62,7 @@ class CartController extends Controller
             $cartItem->save();
         }
 
+        // 2. بررسی و پاکسازی آیتم‌های موجود در سبد
         $items = Cart::with('variant.product', 'variant.values.attribute')
             ->where('user_id', $user->id)
             ->get();
@@ -65,11 +70,34 @@ class CartController extends Controller
         $price_changes = [];
         $subtotal = 0;
         $product_discount_total = 0;
+        $itemsToRemove = [];
 
-        foreach ($items as $item) {
+        foreach ($items as $index => $item) {
             $variant = $item->variant;
-            $product = $variant->product;
 
+            // ❌ اگر تنوع وجود نداشته باشد، حذف کن
+            if (!$variant) {
+                $itemsToRemove[] = $item->id;
+                continue;
+            }
+
+            $product = $variant->product;
+            $availableStock = (int)$variant->stock;
+
+            // ❌ اگر موجودی صفر یا منفی است، حذف کن
+            if ($availableStock <= 0) {
+                $itemsToRemove[] = $item->id;
+                continue;
+            }
+
+            // ❌ اگر تعداد درخواستی بیشتر از موجودی است، اصلاح کن
+            if ((int)$item->quantity > $availableStock) {
+                $item->quantity = $availableStock;
+                $item->alert_message = "موجودی به {$availableStock} عدد کاهش یافت";
+                $item->save();
+            }
+
+            // به‌روزرسانی قیمت‌ها
             $current_base_price = (int) $variant->price;
             $final_unit_price = $this->calculateFinalUnitPrice($current_base_price, $product);
 
@@ -79,34 +107,20 @@ class CartController extends Controller
                     'old_price'   => (int)$item->price_original,
                     'new_price'   => $current_base_price,
                 ];
-
                 $item->price_original = $current_base_price;
                 $item->price_final = $final_unit_price;
                 $item->save();
-            } else {
-                if ((int)$item->price_final !== (int)$final_unit_price) {
-                    $price_changes[] = [
-                        'variant_id' => $item->variant_id,
-                        'old_price_final' => (int)$item->price_final,
-                        'new_price_final' => (int)$final_unit_price,
-                    ];
-
-                    $item->price_final = $final_unit_price;
-                    $item->save();
-                }
-            }
-
-            // چک موجودی برای آیتم‌های موجود در سبد
-            $availableStock = (int)$variant->stock;
-            $currentQuantity = (int)$item->quantity;
-
-            if ($currentQuantity > $availableStock) {
-                $item->quantity = $availableStock > 0 ? $availableStock : 0;
+            } else if ((int)$item->price_final !== (int)$final_unit_price) {
+                $price_changes[] = [
+                    'variant_id' => $item->variant_id,
+                    'old_price_final' => (int)$item->price_final,
+                    'new_price_final' => (int)$final_unit_price,
+                ];
+                $item->price_final = $final_unit_price;
                 $item->save();
             }
 
-
-            // مقادیر ردیف را برای خروجی آماده می‌کنیم
+            // محاسبه مقادیر ردیف
             $line_original_total = (int)$item->price_original * (int)$item->quantity;
             $line_final_total = (int)$item->price_final * (int)$item->quantity;
             $line_discount = $line_original_total - $line_final_total;
@@ -119,6 +133,16 @@ class CartController extends Controller
             $product_discount_total += $line_discount;
         }
 
+        // 3. حذف آیتم‌های نامعتبر
+        if (!empty($itemsToRemove)) {
+            Cart::whereIn('id', $itemsToRemove)->delete();
+            // حذف آیتم‌های حذف شده از مجموعه
+            $items = $items->filter(function ($item) use ($itemsToRemove) {
+                return !in_array($item->id, $itemsToRemove);
+            });
+        }
+
+        // ادامه محاسبات...
         $club_volume_discount = $this->clubService->calculateVolumeDiscount($items, $subtotal);
         $finalTotal = $subtotal - $club_volume_discount['discount_amount'];
 
@@ -175,7 +199,12 @@ class CartController extends Controller
         $user = $request->user();
         $variant = ProductVariant::with('product')->findOrFail($request->variant_id);
         $quantity = $request->quantity ?? 1;
-
+        if ($variant->stock <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'محصول مورد نظر موجود نمی‌باشد'
+            ], 422);
+        }
         if ($variant->stock < $quantity) {
             return response()->json([
                 'success' => false,
@@ -251,7 +280,14 @@ class CartController extends Controller
         }
 
         $variant = $item->variant;
-
+        if ($variant->stock <= 0) {
+            $item->delete();
+            return response()->json([
+                'success' => true,
+                'message' => 'محصول به دلیل اتمام موجودی از سبد حذف شد',
+                'removed' => true
+            ]);
+        }
         if ($request->quantity > $variant->stock) {
             return response()->json([
                 'success' => false,
