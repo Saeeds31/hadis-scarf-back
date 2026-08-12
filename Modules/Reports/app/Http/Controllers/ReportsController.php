@@ -53,11 +53,30 @@ class ReportsController extends Controller
             'chart' => $chartData,
         ]);
     }
- 
+
+
     public static function productdetailedReport($filters = [])
     {
         $query = Product::query()
-            ->with(['categories', 'variants', 'comments', 'specifications']);
+            ->with(['categories', 'variants', 'comments', 'specifications'])
+            // ============ تعداد فروش ============
+            ->withCount([
+                'orderItems as total_sold' => function ($q) {
+                    $q->whereHas('order', function ($q2) {
+                        $q2->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
+                            ->orWhere('payment_status', 'paid');
+                    });
+                }
+            ])
+            // ============ جمع مبلغ فروش ============
+            ->withSum([
+                'orderItems as total_revenue' => function ($q) {
+                    $q->whereHas('order', function ($q2) {
+                        $q2->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
+                            ->orWhere('payment_status', 'paid');
+                    });
+                }
+            ], 'price');
 
         // فیلتر بر اساس دسته‌بندی
         if (!empty($filters['category_id'])) {
@@ -65,10 +84,12 @@ class ReportsController extends Controller
                 $q->where('categories.id', $filters['category_id']);
             });
         }
+
         // فیلتر بر اساس وضعیت
         if (!empty($filters['status'])) {
             $query->where('status', $filters['status']);
         }
+
         // فیلتر بر اساس بازه قیمت
         if (!empty($filters['price_min'])) {
             $query->where('price', '>=', $filters['price_min']);
@@ -76,10 +97,12 @@ class ReportsController extends Controller
         if (!empty($filters['price_max'])) {
             $query->where('price', '<=', $filters['price_max']);
         }
+
         // فیلتر بر اساس موجودی
         if (!empty($filters['in_stock'])) {
             $query->where('stock', '>', 0);
         }
+
         // فیلتر بر اساس تاریخ ایجاد
         if (!empty($filters['date_from'])) {
             $query->whereDate('created_at', '>=', $filters['date_from']);
@@ -87,13 +110,25 @@ class ReportsController extends Controller
         if (!empty($filters['date_to'])) {
             $query->whereDate('created_at', '<=', $filters['date_to']);
         }
+
         // فیلتر بر اساس داشتن تخفیف
         if (!empty($filters['has_discount'])) {
             $query->whereNotNull('discount_value');
         }
+
+        // ============ فیلتر بر اساس حداقل فروش ============
+        if (!empty($filters['min_sold'])) {
+            $query->having('total_sold', '>=', $filters['min_sold']);
+        }
+
+        // ============ مرتب‌سازی بر اساس فروش ============
+        if (!empty($filters['sort_by_sold'])) {
+            $query->orderBy('total_sold', $filters['sort_by_sold']);
+        }
+
         return $query->paginate(20);
     }
-      public static function userdetailedReport($filters = [])
+    public static function userdetailedReport($filters = [])
     {
         $query = User::query()
             ->with(['addresses', 'roles', 'wallet']);
