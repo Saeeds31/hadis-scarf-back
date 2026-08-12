@@ -43,71 +43,71 @@ class OrdersController extends Controller
     /**
      * لیست سفارش‌ها
      */
-  public function index(Request $request)
-{
-    $query = Order::with(['user', 'address', 'shipping']);
+    public function index(Request $request)
+    {
+        $query = Order::with(['user', 'address', 'shipping']);
 
-    // ============ جستجو ============
-    if ($search = $request->get('search')) {
-        $query->where(function ($q) use ($search) {
-            $q->whereHas('user', function ($q2) use ($search) {
-                $q2->where('full_name', 'like', "%{$search}%")
-                    ->orWhere('mobile', 'like', "%{$search}%");
-            })->orWhereHas('address.user', function ($q2) use ($search) {
-                $q2->where('full_name', 'like', "%{$search}%")
-                    ->orWhere('mobile', 'like', "%{$search}%");
+        // ============ جستجو ============
+        if ($search = $request->get('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->whereHas('user', function ($q2) use ($search) {
+                    $q2->where('full_name', 'like', "%{$search}%")
+                        ->orWhere('mobile', 'like', "%{$search}%");
+                })->orWhereHas('address.user', function ($q2) use ($search) {
+                    $q2->where('full_name', 'like', "%{$search}%")
+                        ->orWhere('mobile', 'like', "%{$search}%");
+                });
             });
-        });
+        }
+
+        // ============ فیلتر وضعیت سفارش ============
+        if ($status = $request->get('status')) {
+            $query->where('status', $status);
+        }
+
+        // ============ فیلتر وضعیت پرداخت ============
+        if ($payment_status = $request->get('payment_status')) {
+            $query->where('payment_status', $payment_status);
+        }
+
+        // ============ فیلتر روش پرداخت ============
+        if ($payment_method = $request->get('payment_method')) {
+            $query->where('payment_method', $payment_method);
+        }
+
+        // ============ فیلتر تاریخ ============
+        if ($from_date = $request->get('from_date')) {
+            $query->whereDate('created_at', '>=', $from_date);
+        }
+
+        if ($to_date = $request->get('to_date')) {
+            $query->whereDate('created_at', '<=', $to_date);
+        }
+
+        // دریافت سفارشات
+        $orders = $query->latest()->paginate(20);
+
+        // ============== آمار ==============
+        $statsQuery = clone $query;
+
+        // آمار با فیلترهای اعمال شده
+        $stats = [
+            'total_orders' => $statsQuery->count(),
+            'paid_orders' => (clone $statsQuery)->where('payment_status', 'paid')->count(),
+            'cancelled_orders' => (clone $statsQuery)->where('status', 'cancelled')->count(),
+            'wallet_payments' => (clone $statsQuery)->where('payment_method', 'wallet')->count(),
+            'online_payments' => (clone $statsQuery)->where('payment_method', 'online')->count(),
+            'total_sales' => (clone $statsQuery)->sum('total') ?? 0,
+            'total_discount' => (clone $statsQuery)->sum('discount_amount') ?? 0,
+        ];
+
+        return response()->json([
+            'message' => "لیست سفارشات",
+            'success' => true,
+            'data' => $orders,
+            'stats' => $stats,
+        ]);
     }
-
-    // ============ فیلتر وضعیت سفارش ============
-    if ($status = $request->get('status')) {
-        $query->where('status', $status);
-    }
-
-    // ============ فیلتر وضعیت پرداخت ============
-    if ($payment_status = $request->get('payment_status')) {
-        $query->where('payment_status', $payment_status);
-    }
-
-    // ============ فیلتر روش پرداخت ============
-    if ($payment_method = $request->get('payment_method')) {
-        $query->where('payment_method', $payment_method);
-    }
-
-    // ============ فیلتر تاریخ ============
-    if ($from_date = $request->get('from_date')) {
-        $query->whereDate('created_at', '>=', $from_date);
-    }
-
-    if ($to_date = $request->get('to_date')) {
-        $query->whereDate('created_at', '<=', $to_date);
-    }
-
-    // دریافت سفارشات
-    $orders = $query->latest()->paginate(20);
-
-    // ============== آمار ==============
-    $statsQuery = clone $query;
-    
-    // آمار با فیلترهای اعمال شده
-    $stats = [
-        'total_orders' => $statsQuery->count(),
-        'paid_orders' => (clone $statsQuery)->where('payment_status', 'paid')->count(),
-        'cancelled_orders' => (clone $statsQuery)->where('status', 'cancelled')->count(),
-        'wallet_payments' => (clone $statsQuery)->where('payment_method', 'wallet')->count(),
-        'online_payments' => (clone $statsQuery)->where('payment_method', 'online')->count(),
-        'total_sales' => (clone $statsQuery)->sum('total') ?? 0,
-        'total_discount' => (clone $statsQuery)->sum('discount_amount') ?? 0,
-    ];
-
-    return response()->json([
-        'message' => "لیست سفارشات",
-        'success' => true,
-        'data' => $orders,
-        'stats' => $stats,
-    ]);
-}
     /**
      * ایجاد سفارش جدید
      */
@@ -319,7 +319,7 @@ class OrdersController extends Controller
             "notification_order",
             ['order' => $order->id]
         );
-        $this->smsService->sendToKavenegar('change-order-status', $order->user->mobile, $order->id, ['token20' => $order->user->getDisplayName($order->address->receiver_name), 'token2' => $order->status_label]);
+        $this->smsService->sendToKavenegar('change-order-status', $order->user->mobile, $order->id, ['token20' => $order->user->getDisplayName($order->address->receiver_name), 'token10' => $order->status_label]);
         return response()->json([
             'message' => 'وضعیت سفارش با موفقیت تغییر کرد',
             'order'   => $order->load(['items', 'user', 'address', 'shipping'])
