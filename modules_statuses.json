@@ -29,5 +29,6 @@
     "Notifications": true,
     "Story": true,
     "Payment": true,
-    "Club": true
+    "Club": true,
+    "CardTransfer": true
 }
