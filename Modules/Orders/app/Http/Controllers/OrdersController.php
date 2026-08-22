@@ -145,7 +145,7 @@ class OrdersController extends Controller
             [
                 'message' => 'جزئیات سفارش',
                 'success' => true,
-                'data' => $order->load(['user', 'address.province', 'address.city', 'shipping', 'items.product', 'items.variant.values'])
+                'data' => $order->load(['user', 'address.province', 'address.city', 'shipping', 'items.product', 'items.variant.values','cardTransferReceipt'])
             ]
         );
     }

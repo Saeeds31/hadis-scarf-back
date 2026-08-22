@@ -74,7 +74,6 @@ class ExpireCardTransferOrders extends Command
             Log::channel('daily')->info("card-transfer:expire completed - Processed: {$this->processedCount}, Failed: {$this->failedCount}");
 
             return self::SUCCESS;
-
         } catch (\Exception $e) {
             Log::channel('daily')->error('card-transfer:expire failed: ' . $e->getMessage());
             $this->error('Command failed: ' . $e->getMessage());
@@ -113,7 +112,7 @@ class ExpireCardTransferOrders extends Command
 
                 // بررسی مجدد که هنوز رسید نداره و وضعیتش تغییری نکرده
                 $hasReceipt = CardTransferReceipt::where('order_id', $lockedOrder->id)->exists();
-                
+
                 if ($hasReceipt) {
                     Log::channel('daily')->info("Order #{$order->id} has receipt, skipping");
                     return;
