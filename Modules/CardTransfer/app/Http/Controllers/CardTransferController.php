@@ -28,7 +28,62 @@ class CardTransferController extends Controller
         $this->productStockService = $productStockService;
         $this->clubService = $clubService;
     }
+    /**
+     * لیست رسیدهای کارت به کارت برای ادمین
+     */
+    public function index(Request $request)
+    {
+        $query = CardTransferReceipt::with([
+            'order',
+            'order.user',
+            'order.items',
+            'admin'
+        ])
+            ->orderBy('created_at', 'desc');
 
+        // فیلتر بر اساس وضعیت
+        if ($request->has('status') && $request->status) {
+            $query->where('status', $request->status);
+        }
+
+        // فیلتر بر اساس کد سفارش
+        if ($request->has('order_id') && $request->order_id) {
+            $query->whereHas('order', function ($q) use ($request) {
+                $q->where('id', $request->order_id);
+            });
+        }
+
+        $receipts = $query->paginate($request->per_page ?? 15);
+
+        return response()->json([
+            'success' => true,
+            'data' => $receipts->items(),
+            'meta' => [
+                'current_page' => $receipts->currentPage(),
+                'last_page' => $receipts->lastPage(),
+                'per_page' => $receipts->perPage(),
+                'total' => $receipts->total(),
+            ]
+        ]);
+    }
+
+    /**
+     * نمایش یک رسید
+     */
+    public function show($id)
+    {
+        $receipt = CardTransferReceipt::with([
+            'order',
+            'order.user',
+            'order.items',
+            'admin'
+        ])->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $receipt
+        ]);
+    }
     /**
      * ثبت سفارش کارت به کارت
      */
@@ -151,9 +206,9 @@ class CardTransferController extends Controller
                 'discount_amount' => $discountAmount,
                 'shipping_cost' => $shippingCost,
                 'total' => $total,
-                'payment_method' => 'card_transfer', 
+                'payment_method' => 'card_transfer',
                 'payment_status' => 'pending',
-                'status' => 'card_transfer_pending', 
+                'status' => 'card_transfer_pending',
             ]);
 
             // ثبت آیتم‌ها و کم کردن موجودی

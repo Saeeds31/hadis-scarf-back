@@ -64,6 +64,7 @@ class RunController extends Controller
             'province'   => 'استان',
             'product'   => 'محصول',
             'Setting'   => 'تنظیمات',
+            'CardToCard'   => 'کارت به کارت',
             'contact'   => 'فرم ارتباط باما',
             'shipping'   => 'حمل و نقل',
             'Slider'   => 'اسلایدر',
