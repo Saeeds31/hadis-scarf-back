@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Modules\Addresses\Models\Address;
 use Modules\Users\Models\User;
 use Carbon\Carbon;
+use Modules\CardTransfer\Models\CardTransferReceipt;
 use Modules\Coupons\Models\Coupon;
 use Modules\Gateway\Models\GatewayTransaction;
 use Modules\Shipping\Models\Shipping;
@@ -49,14 +50,47 @@ class Order extends Model
             'cancelled' => 'لغو شده',
             'completed' => 'کامل شده',
             'returned' => 'مرجوع شده',
+            'card_transfer_pending' => 'در انتظار آپلود رسید',
+            'card_transfer_review' => 'در انتظار بررسی ادمین',
             'failed' => 'ناموفق',
         ];
-
         return $statuses[$this->status] ?? $this->status;
     }
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+    // در مدل Order اضافه کن
+
+    public function cardTransferReceipt()
+    {
+        return $this->hasOne(CardTransferReceipt::class);
+    }
+
+    public function getPaymentMethodLabelAttribute()
+    {
+        $methods = [
+            'online' => 'پرداخت اینترنتی',
+            'wallet' => 'کیف پول',
+            'card_transfer' => 'کارت به کارت',
+            'cod' => 'پرداخت در محل',
+        ];
+
+        return $methods[$this->payment_method] ?? $this->payment_method;
+    }
+
+
+
+    public function getPaymentStatusLabelAttribute()
+    {
+        $statuses = [
+            'pending' => 'در انتظار پرداخت',
+            'paid' => 'پرداخت شده',
+            'failed' => 'ناموفق',
+            'refunded' => 'بازگشت داده شده',
+        ];
+
+        return $statuses[$this->payment_status] ?? $this->payment_status;
     }
     public function coupon()
     {
