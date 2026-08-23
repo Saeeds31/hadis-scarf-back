@@ -6,165 +6,741 @@ use App\Http\Controllers\Controller;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Modules\Addresses\Models\Address;
+use Modules\Attributes\Models\AttributeValue;
 use Modules\Orders\Models\Order;
 use Modules\Orders\Models\OrderItem;
 use Modules\Products\Models\Product;
 use Modules\Users\Models\User;
 use Modules\Categories\Models\Category;
+use Modules\Locations\Models\City;
+use Modules\Locations\Models\Province;
+use Modules\Products\Models\ProductVariant;
+use Modules\Shipping\Models\Shipping;
 
 class ReportsController extends Controller
 {
     /**
-     * Dashboard summary with charts
+     * گزارش فروش تنوع‌ها (شامل محصولات بدون تنوع)
      */
-    public function dashboardReport(Request $request)
+    public function variantSalesReport(Request $request)
     {
-        // وضعیت‌های معتبر برای سفارشات موفق
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+        $filters = $request->all();
 
-        // کوئری پایه برای سفارشات موفق
-        $baseQuery = Order::where(function ($query) use ($validStatuses) {
-            $query->whereIn('status', $validStatuses)
-                ->orWhere('payment_status', 'paid');
-        });
+        // ابتدا تمام محصولات را با تنوع‌هایشان دریافت می‌کنیم
+        $products = Product::with(['variants.values.attribute', 'categories'])->get();
 
-        // اعمال فیلتر تاریخ
-        if ($request->filled('date_from')) {
-            $baseQuery->whereDate('created_at', '>=', $request->date_from);
+        $reportData = [];
+        $totalItemsSold = 0;
+        $totalStock = 0;
+
+        foreach ($products as $product) {
+            // اگر محصول تنوع دارد، هر تنوع را جداگانه بررسی می‌کنیم
+            if ($product->variants->count() > 0) {
+                foreach ($product->variants as $variant) {
+                    // فیلتر بر اساس ویژگی (اگر انتخاب شده باشد)
+                    if (!empty($filters['attribute_id'])) {
+                        $hasAttribute = false;
+                        foreach ($variant->values as $value) {
+                            if ($value->attribute_id == $filters['attribute_id']) {
+                                $hasAttribute = true;
+                                break;
+                            }
+                        }
+                        if (!$hasAttribute) {
+                            continue;
+                        }
+                    }
+
+                    // فیلتر بر اساس دسته‌بندی (اگر انتخاب شده باشد)
+                    if (!empty($filters['category_id'])) {
+                        $categoryIds = $variant->product->categories->pluck('id')->toArray();
+                        if (!in_array($filters['category_id'], $categoryIds)) {
+                            continue;
+                        }
+                    }
+
+                    // فیلتر بر اساس محصول (اگر انتخاب شده باشد)
+                    if (!empty($filters['product_id']) && $variant->product_id != $filters['product_id']) {
+                        continue;
+                    }
+
+                    $variantData = $this->getVariantSalesData($variant, $filters);
+                    $reportData[] = $variantData;
+
+                    // جمع‌آوری آمار
+                    $totalItemsSold += $variantData['sales_summary']['total_quantity_sold'];
+                    $totalStock += $variantData['variant']['stock'];
+                }
+            } else {
+                // اگر محصول تنوع ندارد، یک رکورد مجازی برای آن ایجاد می‌کنیم
+                // فیلتر بر اساس ویژگی (محصولات بدون تنوع را رد می‌کنیم اگر ویژگی انتخاب شده باشد)
+                if (!empty($filters['attribute_id'])) {
+                    continue;
+                }
+
+                // فیلتر بر اساس دسته‌بندی (اگر انتخاب شده باشد)
+                if (!empty($filters['category_id'])) {
+                    $categoryIds = $product->categories->pluck('id')->toArray();
+                    if (!in_array($filters['category_id'], $categoryIds)) {
+                        continue;
+                    }
+                }
+
+                // فیلتر بر اساس محصول (اگر انتخاب شده باشد)
+                if (!empty($filters['product_id']) && $product->id != $filters['product_id']) {
+                    continue;
+                }
+
+                $variantData = $this->getProductAsVariantData($product, $filters);
+                $reportData[] = $variantData;
+
+                // جمع‌آوری آمار
+                $totalItemsSold += $variantData['sales_summary']['total_quantity_sold'];
+                $totalStock += $variantData['variant']['stock'];
+            }
         }
-        if ($request->filled('date_to')) {
-            $baseQuery->whereDate('created_at', '<=', $request->date_to);
+
+        // محاسبه کل فروش با متد کمکی یکسان (مثل گزارش محصولات و کاربران)
+        $totalSales = $this->getTotalSales($filters);
+
+        // تعداد تنوع‌های با فروش و بدون فروش
+        $variantsWithSales = 0;
+        $variantsWithoutSales = 0;
+
+        foreach ($reportData as $item) {
+            if ($item['sales_summary']['total_quantity_sold'] > 0) {
+                $variantsWithSales++;
+            } else {
+                $variantsWithoutSales++;
+            }
         }
 
-        // آمار خلاصه
+        // خلاصه آماری کل
         $summary = [
-            'total_sales' => $baseQuery->sum('total') ?? 0,
-            'total_orders' => $baseQuery->count(),
-            'average_order_value' => $baseQuery->count() > 0
-                ? round($baseQuery->sum('total') / $baseQuery->count())
-                : 0,
-            'total_customers' => $baseQuery->distinct('user_id')->count('user_id'),
-            'total_discount' => $baseQuery->sum('discount_amount') ?? 0,
+            'total_variants' => count($reportData),
+            'total_stock' => $totalStock,
+            'total_revenue' => $totalSales,
+            'total_items_sold' => $totalItemsSold,
+            'variants_with_sales' => $variantsWithSales,
+            'variants_without_sales' => $variantsWithoutSales,
         ];
 
-        // فروش روزانه (نمودار)
-        $dailySales = Order::where(function ($query) use ($validStatuses) {
-            $query->whereIn('status', $validStatuses)
-                ->orWhere('payment_status', 'paid');
-        })
-            ->when($request->filled('date_from'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select(
-                DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total) as total_sales'),
-                DB::raw('COUNT(*) as total_orders'),
-                DB::raw('SUM(discount_amount) as total_discount')
-            )
-            ->groupBy('date')
-            ->orderBy('date', 'desc')
-            ->limit(30)
-            ->get();
-
-        // محصولات پرفروش
-        $topProducts = OrderItem::whereHas('order', function ($q) use ($request, $validStatuses) {
-            $q->where(function ($query) use ($validStatuses) {
-                $query->whereIn('status', $validStatuses)
-                    ->orWhere('payment_status', 'paid');
-            });
-            if ($request->filled('date_from')) {
-                $q->whereDate('created_at', '>=', $request->date_from);
-            }
-            if ($request->filled('date_to')) {
-                $q->whereDate('created_at', '<=', $request->date_to);
-            }
-        })
-            ->join('products', 'order_items.product_id', '=', 'products.id')
-            ->select(
-                'products.id',
-                'products.title',
-                'products.main_image',
-                DB::raw('SUM(order_items.quantity) as total_quantity'),
-                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
-                DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
-            )
-            ->groupBy('products.id', 'products.title', 'products.main_image')
-            ->orderBy('total_revenue', 'desc')
-            ->limit(10)
-            ->get();
-
-        // فروش به تفکیک روش پرداخت
-        $paymentMethods = Order::where(function ($query) use ($validStatuses) {
-            $query->whereIn('status', $validStatuses)
-                ->orWhere('payment_status', 'paid');
-        })
-            ->when($request->filled('date_from'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select(
-                'payment_method',
-                DB::raw('COUNT(*) as orders_count'),
-                DB::raw('SUM(total) as total_amount'),
-                DB::raw('AVG(total) as average_amount')
-            )
-            ->groupBy('payment_method')
-            ->get();
-
-        // فروش به تفکیک وضعیت
-        $ordersByStatus = Order::when($request->filled('date_from'), function ($q) use ($request) {
-            return $q->whereDate('created_at', '>=', $request->date_from);
-        })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as total_amount'))
-            ->groupBy('status')
-            ->get();
-
-        // فروش ماهانه (برای نمودار)
-        $monthlySales = Order::where(function ($query) use ($validStatuses) {
-            $query->whereIn('status', $validStatuses)
-                ->orWhere('payment_status', 'paid');
-        })
-            ->when($request->filled('date_from'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select(
-                DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
-                DB::raw('SUM(total) as total_sales'),
-                DB::raw('COUNT(*) as total_orders')
-            )
-            ->groupBy('month')
-            ->orderBy('month', 'desc')
-            ->limit(12)
-            ->get();
+        // تحلیل فروش بر اساس ویژگی‌ها
+        $attributeAnalysis = $this->analyzeSalesByAttribute($reportData);
 
         return response()->json([
+            'data' => $reportData,
             'summary' => $summary,
-            'daily_sales' => $dailySales,
-            'monthly_sales' => $monthlySales,
-            'top_products' => $topProducts,
-            'payment_methods' => $paymentMethods,
-            'orders_by_status' => $ordersByStatus,
-            'filters' => $request->all(),
+            'attribute_analysis' => $attributeAnalysis,
+            'filters' => $filters,
+        ]);
+    }
+    /**
+     * دریافت داده‌های فروش برای یک تنوع خاص
+     */
+    private function getVariantSalesData($variant, $filters)
+    {
+        // کوئری آیتم‌های سفارش برای این تنوع
+        $orderItemsQuery = OrderItem::where('product_variant_id', $variant->id)
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            });
+
+        // محاسبه آمار فروش
+        $salesData = $orderItemsQuery->select(
+            DB::raw('SUM(quantity) as total_quantity'),
+            DB::raw('SUM(price * quantity) as total_revenue'),
+            DB::raw('COUNT(DISTINCT order_id) as total_orders')
+        )->first();
+
+        // استخراج مقادیر با اطمینان از عدد بودن
+        $quantitySold = (int) ($salesData->total_quantity ?? 0);
+        $revenue = (float) ($salesData->total_revenue ?? 0);
+        $orders = (int) ($salesData->total_orders ?? 0);
+
+        // فروش‌های اخیر این تنوع
+        $recentSales = OrderItem::where('product_variant_id', $variant->id)
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            })
+            ->with(['order.user', 'order'])
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'order_id' => $item->order_id,
+                    'customer_name' => $item->order->user->full_name ?? 'کاربر مهمان',
+                    'quantity' => $item->quantity,
+                    'price_per_unit' => $item->price,
+                    'total_price' => $item->price * $item->quantity,
+                    'sold_at' => $item->order->created_at->format('Y-m-d H:i'),
+                ];
+            });
+
+        // داده‌های نمودار برای این تنوع
+        $chartData = OrderItem::where('product_variant_id', $variant->id)
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            })
+            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->select(
+                DB::raw('DATE(orders.created_at) as date'),
+                DB::raw('SUM(order_items.quantity) as daily_quantity'),
+                DB::raw('SUM(order_items.price * order_items.quantity) as daily_revenue')
+            )
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get();
+
+        // استخراج ویژگی‌های تنوع
+        $attributes = $variant->values->map(function ($value) {
+            return [
+                'attribute_name' => $value->attribute->name,
+                'attribute_id' => $value->attribute->id,
+                'value' => $value->value,
+                'value_id' => $value->id,
+            ];
+        });
+
+        return [
+            'variant' => [
+                'id' => $variant->id,
+                'sku' => $variant->sku,
+                'price' => $variant->price,
+                'stock' => $variant->stock,
+                'product' => [
+                    'id' => $variant->product->id,
+                    'title' => $variant->product->title,
+                    'main_image' => $variant->product->main_image,
+                    'status' => $variant->product->status,
+                ],
+                'attributes' => $attributes,
+                'attributes_string' => $attributes->map(function ($attr) {
+                    return $attr['attribute_name'] . ': ' . $attr['value'];
+                })->join(' - '),
+                'is_variant' => true,
+            ],
+            'sales_summary' => [
+                'total_quantity_sold' => $quantitySold,
+                'total_revenue' => $revenue,
+                'total_orders' => $orders,
+                'average_price' => $quantitySold > 0 ? round($revenue / $quantitySold) : 0,
+            ],
+            'recent_sales' => $recentSales,
+            'chart_data' => $chartData,
+        ];
+    }
+
+    /**
+     * دریافت داده‌های فروش برای یک محصول بدون تنوع (به عنوان یک تنوع مجازی)
+     */
+    private function getProductAsVariantData($product, $filters)
+    {
+        // کوئری آیتم‌های سفارش برای این محصول (بدون product_variant_id)
+        $orderItemsQuery = OrderItem::where('product_id', $product->id)
+            ->whereNull('product_variant_id')
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            });
+
+        // محاسبه آمار فروش
+        $salesData = $orderItemsQuery->select(
+            DB::raw('SUM(quantity) as total_quantity'),
+            DB::raw('SUM(price * quantity) as total_revenue'),
+            DB::raw('COUNT(DISTINCT order_id) as total_orders')
+        )->first();
+
+        // استخراج مقادیر با اطمینان از عدد بودن
+        $quantitySold = (int) ($salesData->total_quantity ?? 0);
+        $revenue = (float) ($salesData->total_revenue ?? 0);
+        $orders = (int) ($salesData->total_orders ?? 0);
+
+        // فروش‌های اخیر این محصول
+        $recentSales = OrderItem::where('product_id', $product->id)
+            ->whereNull('product_variant_id')
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            })
+            ->with(['order.user', 'order'])
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'order_id' => $item->order_id,
+                    'customer_name' => $item->order->user->full_name ?? 'کاربر مهمان',
+                    'quantity' => $item->quantity,
+                    'price_per_unit' => $item->price,
+                    'total_price' => $item->price * $item->quantity,
+                    'sold_at' => $item->order->created_at->format('Y-m-d H:i'),
+                ];
+            });
+
+        // داده‌های نمودار برای این محصول
+        $chartData = OrderItem::where('product_id', $product->id)
+            ->whereNull('product_variant_id')
+            ->whereHas('order', function ($q) use ($filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            })
+            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->select(
+                DB::raw('DATE(orders.created_at) as date'),
+                DB::raw('SUM(order_items.quantity) as daily_quantity'),
+                DB::raw('SUM(order_items.price * order_items.quantity) as daily_revenue')
+            )
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get();
+
+        return [
+            'variant' => [
+                'id' => $product->id,
+                'sku' => $product->sku,
+                'price' => $product->price,
+                'stock' => $product->stock,
+                'product' => [
+                    'id' => $product->id,
+                    'title' => $product->title,
+                    'main_image' => $product->main_image,
+                    'status' => $product->status,
+                ],
+                'attributes' => [],
+                'attributes_string' => 'بدون تنوع',
+                'is_variant' => false,
+            ],
+            'sales_summary' => [
+                'total_quantity_sold' => $quantitySold,
+                'total_revenue' => $revenue,
+                'total_orders' => $orders,
+                'average_price' => $quantitySold > 0 ? round($revenue / $quantitySold) : 0,
+            ],
+            'recent_sales' => $recentSales,
+            'chart_data' => $chartData,
+        ];
+    }
+    /**
+     * تحلیل فروش بر اساس ویژگی‌ها (مثلاً فروش بر اساس رنگ)
+     */
+    private function analyzeSalesByAttribute($reportData)
+    {
+        $attributeSales = [];
+
+        foreach ($reportData as $item) {
+            // اطمینان از وجود attributes
+            if (!isset($item['variant']['attributes']) || !is_iterable($item['variant']['attributes'])) {
+                continue;
+            }
+
+            foreach ($item['variant']['attributes'] as $attr) {
+                $key = $attr['attribute_name'] . '|' . $attr['value'];
+
+                if (!isset($attributeSales[$key])) {
+                    $attributeSales[$key] = [
+                        'attribute_name' => $attr['attribute_name'],
+                        'attribute_value' => $attr['value'],
+                        'total_quantity' => 0,
+                        'total_revenue' => 0,
+                        'variant_count' => 0,
+                    ];
+                }
+
+                // اطمینان از عدد بودن مقادیر
+                $attributeSales[$key]['total_quantity'] += (int) ($item['sales_summary']['total_quantity_sold'] ?? 0);
+                $attributeSales[$key]['total_revenue'] += (float) ($item['sales_summary']['total_revenue'] ?? 0);
+                $attributeSales[$key]['variant_count']++;
+            }
+        }
+
+        // مرتب‌سازی بر اساس درآمد (نزولی)
+        usort($attributeSales, function ($a, $b) {
+            return ($b['total_revenue'] ?? 0) - ($a['total_revenue'] ?? 0);
+        });
+
+        // تبدیل به array برای اطمینان
+        return array_values($attributeSales);
+    }
+    /**
+     * مقایسه فروش تنوع‌های یک محصول خاص
+     */
+    public function productVariantsComparison(Request $request)
+    {
+        if (!$request->filled('product_id')) {
+            return response()->json(['error' => 'شناسه محصول الزامی است'], 400);
+        }
+
+        $productId = $request->product_id;
+        $filters = $request->all();
+
+        $product = Product::with(['variants.values.attribute'])->find($productId);
+
+        if (!$product) {
+            return response()->json(['error' => 'محصول یافت نشد'], 404);
+        }
+
+        $variantsData = $product->variants->map(function ($variant) use ($filters) {
+            $orderItemsQuery = OrderItem::where('product_variant_id', $variant->id)
+                ->whereHas('order', function ($q) use ($filters) {
+                    $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                    $q->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
+                    if (!empty($filters['date_from'])) {
+                        $q->whereDate('created_at', '>=', $filters['date_from']);
+                    }
+                    if (!empty($filters['date_to'])) {
+                        $q->whereDate('created_at', '<=', $filters['date_to']);
+                    }
+                });
+
+            $salesData = $orderItemsQuery->select(
+                DB::raw('SUM(quantity) as total_quantity'),
+                DB::raw('SUM(price * quantity) as total_revenue'),
+                DB::raw('COUNT(DISTINCT order_id) as total_orders')
+            )->first();
+
+            return [
+                'variant' => [
+                    'id' => $variant->id,
+                    'sku' => $variant->sku,
+                    'price' => $variant->price,
+                    'stock' => $variant->stock,
+                    'attributes' => $variant->values->map(function ($value) {
+                        return [
+                            'name' => $value->attribute->name,
+                            'value' => $value->value,
+                        ];
+                    }),
+                    'attributes_string' => $variant->values->map(function ($value) {
+                        return $value->attribute->name . ': ' . $value->value;
+                    })->join(' - '),
+                ],
+                'sales' => [
+                    'total_quantity' => $salesData->total_quantity ?? 0,
+                    'total_revenue' => $salesData->total_revenue ?? 0,
+                    'total_orders' => $salesData->total_orders ?? 0,
+                ],
+                'percentage_of_total' => 0, // بعداً محاسبه می‌شود
+            ];
+        });
+
+        // محاسبه درصد هر تنوع از کل فروش محصول
+        $totalRevenue = $variantsData->sum('sales.total_revenue');
+        $totalQuantity = $variantsData->sum('sales.total_quantity');
+
+        $variantsData = $variantsData->map(function ($item) use ($totalRevenue, $totalQuantity) {
+            $item['percentage_of_total'] = [
+                'revenue' => $totalRevenue > 0
+                    ? round(($item['sales']['total_revenue'] / $totalRevenue) * 100, 2)
+                    : 0,
+                'quantity' => $totalQuantity > 0
+                    ? round(($item['sales']['total_quantity'] / $totalQuantity) * 100, 2)
+                    : 0,
+            ];
+            return $item;
+        });
+
+        // مرتب‌سازی بر اساس درآمد
+        $variantsData = $variantsData->sortByDesc(function ($item) {
+            return $item['sales']['total_revenue'];
+        })->values();
+
+        return response()->json([
+            'product' => [
+                'id' => $product->id,
+                'title' => $product->title,
+                'main_image' => $product->main_image,
+            ],
+            'variants' => $variantsData,
+            'total_summary' => [
+                'total_revenue' => $totalRevenue,
+                'total_quantity' => $totalQuantity,
+                'total_variants' => $variantsData->count(),
+            ],
+            'filters' => $filters,
         ]);
     }
 
     /**
-     * Comprehensive Product Report with In/Out/Stock
+     * متد کمکی برای دریافت کوئری پایه سفارشات موفق
+     */
+    private function getSuccessfulOrdersQuery($filters = [])
+    {
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+
+        $query = Order::where(function ($q) use ($validStatuses) {
+            $q->whereIn('status', $validStatuses)
+                ->orWhere('payment_status', 'paid');
+        });
+
+        // اعمال فیلتر تاریخ
+        if (!empty($filters['date_from'])) {
+            $query->whereDate('created_at', '>=', $filters['date_from']);
+        }
+        if (!empty($filters['date_to'])) {
+            $query->whereDate('created_at', '<=', $filters['date_to']);
+        }
+
+        return $query;
+    }
+
+    /**
+     * متد کمکی برای محاسبه کل فروش
+     */
+    private function getTotalSales($filters = [])
+    {
+        return $this->getSuccessfulOrdersQuery($filters)->sum('total') ?? 0;
+    }
+
+    /**
+     * متد کمکی برای محاسبه کل سفارشات
+     */
+    private function getTotalOrders($filters = [])
+    {
+        return $this->getSuccessfulOrdersQuery($filters)->count();
+    }
+
+    /**
+     * متد کمکی برای دریافت کوئری آیتم‌های سفارش موفق
+     */
+    private function getSuccessfulOrderItemsQuery($filters = [])
+    {
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+
+        $query = OrderItem::whereHas('order', function ($q) use ($validStatuses, $filters) {
+            $q->where(function ($query) use ($validStatuses) {
+                $query->whereIn('status', $validStatuses)
+                    ->orWhere('payment_status', 'paid');
+            });
+
+            if (!empty($filters['date_from'])) {
+                $q->whereDate('created_at', '>=', $filters['date_from']);
+            }
+            if (!empty($filters['date_to'])) {
+                $q->whereDate('created_at', '<=', $filters['date_to']);
+            }
+        });
+
+        return $query;
+    }
+
+    /**
+     * گزارش خرید کاربران - نسخه اصلاح‌شده
+     */
+    public function userPurchaseReport(Request $request)
+    {
+        $filters = $request->all();
+
+        $query = User::query()
+            ->with(['addresses', 'roles', 'wallet']);
+
+        // فیلترها
+        if ($request->filled('role_id')) {
+            $query->whereHas('roles', function ($q) use ($request) {
+                $q->where('roles.id', $request->role_id);
+            });
+        }
+
+        if ($request->filled('mobile')) {
+            $query->where('mobile', 'like', "%{$request->mobile}%");
+        }
+
+        if ($request->filled('full_name')) {
+            $query->where('full_name', 'like', "%{$request->full_name}%");
+        }
+
+        if ($request->filled('national_code')) {
+            $query->where('national_code', 'like', "%{$request->national_code}%");
+        }
+
+        // دریافت کاربران
+        $users = $query->get();
+
+        $reportData = $users->map(function ($user) use ($filters) {
+            // کوئری سفارشات کاربر با استفاده از متد کمکی
+            $ordersQuery = Order::where('user_id', $user->id)
+                ->where(function ($q) {
+                    $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                    $q->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+
+            if (!empty($filters['date_from'])) {
+                $ordersQuery->whereDate('created_at', '>=', $filters['date_from']);
+            }
+            if (!empty($filters['date_to'])) {
+                $ordersQuery->whereDate('created_at', '<=', $filters['date_to']);
+            }
+
+            $orders = $ordersQuery->with(['items.product'])->get();
+
+            // داده‌های خرید
+            $purchaseData = [
+                'total_orders' => $orders->count(),
+                'total_items' => $orders->sum(function ($order) {
+                    return $order->items->sum('quantity');
+                }),
+                'total_spent' => $orders->sum('total'),
+                'average_order_value' => $orders->count() > 0
+                    ? round($orders->sum('total') / $orders->count())
+                    : 0,
+                'first_purchase' => $orders->min('created_at'),
+                'last_purchase' => $orders->max('created_at'),
+                'orders' => $orders->map(function ($order) {
+                    return [
+                        'order_id' => $order->id,
+                        'total' => $order->total,
+                        'status' => $order->status,
+                        'payment_status' => $order->payment_status,
+                        'payment_method' => $order->payment_method,
+                        'items' => $order->items->map(function ($item) {
+                            return [
+                                'product' => $item->product->title ?? 'محصول حذف شده',
+                                'product_id' => $item->product_id,
+                                'quantity' => $item->quantity,
+                                'price' => $item->price,
+                                'total' => $item->price * $item->quantity,
+                            ];
+                        }),
+                        'created_at' => $order->created_at->format('Y-m-d H:i'),
+                    ];
+                }),
+            ];
+
+            // محصولات پرفروش این کاربر
+            $topProducts = OrderItem::whereHas('order', function ($q) use ($user, $filters) {
+                $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+                $q->where('user_id', $user->id)
+                    ->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
+                if (!empty($filters['date_from'])) {
+                    $q->whereDate('created_at', '>=', $filters['date_from']);
+                }
+                if (!empty($filters['date_to'])) {
+                    $q->whereDate('created_at', '<=', $filters['date_to']);
+                }
+            })
+                ->join('products', 'order_items.product_id', '=', 'products.id')
+                ->select(
+                    'products.id',
+                    'products.title',
+                    DB::raw('SUM(order_items.quantity) as total_quantity'),
+                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent'),
+                    DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
+                )
+                ->groupBy('products.id', 'products.title')
+                ->orderBy('total_quantity', 'desc')
+                ->limit(5)
+                ->get();
+
+            return [
+                'user' => [
+                    'id' => $user->id,
+                    'full_name' => $user->full_name,
+                    'mobile' => $user->mobile,
+                    'national_code' => $user->national_code,
+                    'birth_date' => $user->birth_date,
+                    'roles' => $user->roles->pluck('name'),
+                    'wallet_balance' => $user->wallet?->balance ?? 0,
+                    'has_wallet' => $user->wallet ? true : false,
+                ],
+                'purchase_summary' => $purchaseData,
+                'top_products' => $topProducts,
+            ];
+        });
+
+        // محاسبه کل فروش با متد کمکی یکسان
+        $totalSales = $this->getTotalSales($filters);
+        $totalOrders = $this->getTotalOrders($filters);
+
+        // خلاصه آماری کل
+        $summary = [
+            'total_users' => $users->count(),
+            'total_orders' => $totalOrders,
+            'total_spent' => $totalSales,
+            'total_items' => $reportData->sum('purchase_summary.total_items'),
+            'average_spent_per_user' => $users->count() > 0
+                ? round($totalSales / $users->count())
+                : 0,
+        ];
+
+        return response()->json([
+            'data' => $reportData,
+            'summary' => $summary,
+            'filters' => $filters,
+        ]);
+    }
+
+    /**
+     * گزارش موجودی و فروش کالا - نسخه اصلاح‌شده
      */
     public function productInventoryReport(Request $request)
     {
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+        $filters = $request->all();
 
         $query = Product::query()
             ->with(['categories', 'variants.values.attribute']);
@@ -192,38 +768,13 @@ class ReportsController extends Controller
             });
         }
 
-        if ($request->filled('min_price')) {
-            $query->where('price', '>=', $request->min_price);
-        }
-
-        if ($request->filled('max_price')) {
-            $query->where('price', '<=', $request->max_price);
-        }
-
         // دریافت محصولات
         $products = $query->get();
 
-        $reportData = $products->map(function ($product) use ($request, $validStatuses) {
-            // کوئری پایه برای آیتم‌های سفارش
-            $orderItemsQuery = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($validStatuses) {
-                    $q->where(function ($query) use ($validStatuses) {
-                        $query->whereIn('status', $validStatuses)
-                            ->orWhere('payment_status', 'paid');
-                    });
-                });
-
-            // اعمال فیلتر تاریخ
-            if ($request->filled('date_from')) {
-                $orderItemsQuery->whereHas('order', function ($q) use ($request) {
-                    $q->whereDate('created_at', '>=', $request->date_from);
-                });
-            }
-            if ($request->filled('date_to')) {
-                $orderItemsQuery->whereHas('order', function ($q) use ($request) {
-                    $q->whereDate('created_at', '<=', $request->date_to);
-                });
-            }
+        $reportData = $products->map(function ($product) use ($filters) {
+            // کوئری آیتم‌های سفارش با متد کمکی
+            $orderItemsQuery = $this->getSuccessfulOrderItemsQuery($filters)
+                ->where('product_id', $product->id);
 
             // محاسبه آمار فروش
             $salesData = $orderItemsQuery->select(
@@ -234,16 +785,17 @@ class ReportsController extends Controller
 
             // فروش به ازای هر شخص
             $perPersonSales = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                ->whereHas('order', function ($q) use ($filters) {
+                    $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
                     $q->where(function ($query) use ($validStatuses) {
                         $query->whereIn('status', $validStatuses)
                             ->orWhere('payment_status', 'paid');
                     });
-                    if ($request->filled('date_from')) {
-                        $q->whereDate('created_at', '>=', $request->date_from);
+                    if (!empty($filters['date_from'])) {
+                        $q->whereDate('created_at', '>=', $filters['date_from']);
                     }
-                    if ($request->filled('date_to')) {
-                        $q->whereDate('created_at', '<=', $request->date_to);
+                    if (!empty($filters['date_to'])) {
+                        $q->whereDate('created_at', '<=', $filters['date_to']);
                     }
                 })
                 ->join('orders', 'order_items.order_id', '=', 'orders.id')
@@ -263,16 +815,17 @@ class ReportsController extends Controller
 
             // فروش‌های اخیر
             $recentSales = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                ->whereHas('order', function ($q) use ($filters) {
+                    $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
                     $q->where(function ($query) use ($validStatuses) {
                         $query->whereIn('status', $validStatuses)
                             ->orWhere('payment_status', 'paid');
                     });
-                    if ($request->filled('date_from')) {
-                        $q->whereDate('created_at', '>=', $request->date_from);
+                    if (!empty($filters['date_from'])) {
+                        $q->whereDate('created_at', '>=', $filters['date_from']);
                     }
-                    if ($request->filled('date_to')) {
-                        $q->whereDate('created_at', '<=', $request->date_to);
+                    if (!empty($filters['date_to'])) {
+                        $q->whereDate('created_at', '<=', $filters['date_to']);
                     }
                 })
                 ->with(['order.user', 'order'])
@@ -293,18 +846,19 @@ class ReportsController extends Controller
                     ];
                 });
 
-            // داده‌های نمودار (فروش روزانه)
+            // داده‌های نمودار
             $chartData = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                ->whereHas('order', function ($q) use ($filters) {
+                    $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
                     $q->where(function ($query) use ($validStatuses) {
                         $query->whereIn('status', $validStatuses)
                             ->orWhere('payment_status', 'paid');
                     });
-                    if ($request->filled('date_from')) {
-                        $q->whereDate('created_at', '>=', $request->date_from);
+                    if (!empty($filters['date_from'])) {
+                        $q->whereDate('created_at', '>=', $filters['date_from']);
                     }
-                    if ($request->filled('date_to')) {
-                        $q->whereDate('created_at', '<=', $request->date_to);
+                    if (!empty($filters['date_to'])) {
+                        $q->whereDate('created_at', '<=', $filters['date_to']);
                     }
                 })
                 ->join('orders', 'order_items.order_id', '=', 'orders.id')
@@ -317,7 +871,6 @@ class ReportsController extends Controller
                 ->orderBy('date')
                 ->get();
 
-            // محاسبه موجودی ورودی (بر اساس فروش + موجودی فعلی)
             $totalIncoming = $product->stock + ($salesData->total_quantity ?? 0);
 
             return [
@@ -362,11 +915,14 @@ class ReportsController extends Controller
             ];
         });
 
+        // محاسبه کل فروش با متد کمکی یکسان
+        $totalSales = $this->getTotalSales($filters);
+
         // خلاصه آماری کل
         $summary = [
             'total_products' => $products->count(),
             'total_stock' => $products->sum('stock'),
-            'total_revenue' => $reportData->sum('sales_summary.total_revenue'),
+            'total_revenue' => $totalSales, // استفاده از متد یکسان
             'total_items_sold' => $reportData->sum('sales_summary.total_quantity_sold'),
             'products_with_sales' => $reportData->filter(function ($item) {
                 return $item['sales_summary']['total_quantity_sold'] > 0;
@@ -379,496 +935,578 @@ class ReportsController extends Controller
         return response()->json([
             'data' => $reportData,
             'summary' => $summary,
-            'filters' => $request->all(),
+            'filters' => $filters,
         ]);
     }
 
     /**
-     * Detailed sales report by product with pagination
+     * گزارش داشبورد - نسخه اصلاح‌شده
      */
-    public function productDetailedReport(Request $request)
+    public function dashboardReport(Request $request)
     {
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+        $filters = $request->all();
 
-        $query = Product::query()
-            ->with(['categories', 'variants.values.attribute'])
-            ->withCount([
-                'orderItems as total_sold' => function ($q) use ($request, $validStatuses) {
-                    $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
-                        $q2->where(function ($query) use ($validStatuses) {
-                            $query->whereIn('status', $validStatuses)
-                                ->orWhere('payment_status', 'paid');
-                        });
-                        if ($request->filled('date_from')) {
-                            $q2->whereDate('created_at', '>=', $request->date_from);
-                        }
-                        if ($request->filled('date_to')) {
-                            $q2->whereDate('created_at', '<=', $request->date_to);
-                        }
-                    });
-                }
-            ])
-            ->withSum([
-                'orderItems as total_revenue' => function ($q) use ($request, $validStatuses) {
-                    $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
-                        $q2->where(function ($query) use ($validStatuses) {
-                            $query->whereIn('status', $validStatuses)
-                                ->orWhere('payment_status', 'paid');
-                        });
-                        if ($request->filled('date_from')) {
-                            $q2->whereDate('created_at', '>=', $request->date_from);
-                        }
-                        if ($request->filled('date_to')) {
-                            $q2->whereDate('created_at', '<=', $request->date_to);
-                        }
-                    });
-                }
-            ], 'price');
+        // استفاده از متد کمکی برای کوئری سفارشات موفق
+        $baseQuery = $this->getSuccessfulOrdersQuery($filters);
 
-        // اعمال فیلترها
-        if ($request->filled('category_id')) {
-            $query->whereHas('categories', function ($q) use ($request) {
-                $q->where('categories.id', $request->category_id);
-            });
-        }
-
-        if ($request->filled('product_id')) {
-            $query->where('id', $request->product_id);
-        }
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->filled('search')) {
-            $query->where(function ($q) use ($request) {
-                $q->where('title', 'like', "%{$request->search}%")
-                    ->orWhere('sku', 'like', "%{$request->search}%")
-                    ->orWhere('barcode', 'like', "%{$request->search}%");
-            });
-        }
-
-        if ($request->filled('min_sold')) {
-            $query->having('total_sold', '>=', $request->min_sold);
-        }
-
-        if ($request->filled('min_price')) {
-            $query->where('price', '>=', $request->min_price);
-        }
-
-        if ($request->filled('max_price')) {
-            $query->where('price', '<=', $request->max_price);
-        }
-
-        if ($request->filled('only_with_sales')) {
-            $query->having('total_sold', '>', 0);
-        }
-
-        if ($request->filled('only_without_sales')) {
-            $query->having('total_sold', '=', 0);
-        }
-
-        // مرتب‌سازی
-        if ($request->filled('sort_by')) {
-            $sortField = $request->sort_by;
-            $sortOrder = $request->sort_order ?? 'desc';
-
-            if (in_array($sortField, ['total_sold', 'total_revenue', 'price', 'stock', 'created_at'])) {
-                $query->orderBy($sortField, $sortOrder);
-            } else {
-                $query->orderBy($sortField, $sortOrder);
-            }
-        } else {
-            $query->orderBy('total_sold', 'desc');
-        }
-
-        $perPage = $request->filled('per_page') ? $request->per_page : 20;
-        $products = $query->paginate($perPage);
-
-        // اضافه کردن خلاصه آماری به پاسخ
+        // آمار خلاصه
         $summary = [
-            'total_products' => $products->total(),
-            'total_revenue' => $products->sum('total_revenue'),
-            'total_items_sold' => $products->sum('total_sold'),
-        ];
-
-        return response()->json([
-            'data' => $products->items(),
-            'summary' => $summary,
-            'pagination' => [
-                'current_page' => $products->currentPage(),
-                'last_page' => $products->lastPage(),
-                'per_page' => $products->perPage(),
-                'total' => $products->total(),
-            ],
-            'filters' => $request->all(),
-        ]);
-    }
-
-    /**
-     * User purchase report - how much each person bought
-     */
-    public function userPurchaseReport(Request $request)
-    {
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
-
-        $query = User::query()
-            ->with(['addresses', 'roles', 'wallet']);
-
-        // فیلترها
-        if ($request->filled('role_id')) {
-            $query->whereHas('roles', function ($q) use ($request) {
-                $q->where('roles.id', $request->role_id);
-            });
-        }
-
-        if ($request->filled('mobile')) {
-            $query->where('mobile', 'like', "%{$request->mobile}%");
-        }
-
-        if ($request->filled('full_name')) {
-            $query->where('full_name', 'like', "%{$request->full_name}%");
-        }
-
-        if ($request->filled('national_code')) {
-            $query->where('national_code', 'like', "%{$request->national_code}%");
-        }
-
-        if ($request->filled('has_wallet')) {
-            if ($request->has_wallet) {
-                $query->has('wallet');
-            } else {
-                $query->doesntHave('wallet');
-            }
-        }
-
-        // دریافت کاربران
-        $users = $query->get();
-
-        $reportData = $users->map(function ($user) use ($request, $validStatuses) {
-            // کوئری سفارشات کاربر
-            $ordersQuery = Order::where('user_id', $user->id)
-                ->where(function ($query) use ($validStatuses) {
-                    $query->whereIn('status', $validStatuses)
-                        ->orWhere('payment_status', 'paid');
-                });
-
-            if ($request->filled('date_from')) {
-                $ordersQuery->whereDate('created_at', '>=', $request->date_from);
-            }
-            if ($request->filled('date_to')) {
-                $ordersQuery->whereDate('created_at', '<=', $request->date_to);
-            }
-
-            $orders = $ordersQuery->with(['items.product'])->get();
-
-            // داده‌های خرید
-            $purchaseData = [
-                'total_orders' => $orders->count(),
-                'total_items' => $orders->sum(function ($order) {
-                    return $order->items->sum('quantity');
-                }),
-                'total_spent' => $orders->sum('total'),
-                'average_order_value' => $orders->count() > 0
-                    ? round($orders->sum('total') / $orders->count())
-                    : 0,
-                'first_purchase' => $orders->min('created_at'),
-                'last_purchase' => $orders->max('created_at'),
-                'orders' => $orders->map(function ($order) {
-                    return [
-                        'order_id' => $order->id,
-                        'total' => $order->total,
-                        'status' => $order->status,
-                        'payment_status' => $order->payment_status,
-                        'payment_method' => $order->payment_method,
-                        'items' => $order->items->map(function ($item) {
-                            return [
-                                'product' => $item->product->title ?? 'محصول حذف شده',
-                                'product_id' => $item->product_id,
-                                'quantity' => $item->quantity,
-                                'price' => $item->price,
-                                'total' => $item->price * $item->quantity,
-                            ];
-                        }),
-                        'created_at' => $order->created_at->format('Y-m-d H:i'),
-                    ];
-                }),
-            ];
-
-            // محصولات پرفروش این کاربر
-            $topProducts = OrderItem::whereHas('order', function ($q) use ($user, $request, $validStatuses) {
-                $q->where('user_id', $user->id)
-                    ->where(function ($query) use ($validStatuses) {
-                        $query->whereIn('status', $validStatuses)
-                            ->orWhere('payment_status', 'paid');
-                    });
-                if ($request->filled('date_from')) {
-                    $q->whereDate('created_at', '>=', $request->date_from);
-                }
-                if ($request->filled('date_to')) {
-                    $q->whereDate('created_at', '<=', $request->date_to);
-                }
-            })
-                ->join('products', 'order_items.product_id', '=', 'products.id')
-                ->select(
-                    'products.id',
-                    'products.title',
-                    DB::raw('SUM(order_items.quantity) as total_quantity'),
-                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent'),
-                    DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
-                )
-                ->groupBy('products.id', 'products.title')
-                ->orderBy('total_quantity', 'desc')
-                ->limit(5)
-                ->get();
-
-            return [
-                'user' => [
-                    'id' => $user->id,
-                    'full_name' => $user->full_name,
-                    'mobile' => $user->mobile,
-                    'national_code' => $user->national_code,
-                    'birth_date' => $user->birth_date,
-                    'roles' => $user->roles->pluck('name'),
-                    'wallet_balance' => $user->wallet?->balance ?? 0,
-                    'has_wallet' => $user->wallet ? true : false,
-                ],
-                'purchase_summary' => $purchaseData,
-                'top_products' => $topProducts,
-            ];
-        });
-
-        // خلاصه آماری کل
-        $summary = [
-            'total_users' => $users->count(),
-            'total_orders' => $reportData->sum('purchase_summary.total_orders'),
-            'total_spent' => $reportData->sum('purchase_summary.total_spent'),
-            'total_items' => $reportData->sum('purchase_summary.total_items'),
-            'average_spent_per_user' => $users->count() > 0
-                ? round($reportData->sum('purchase_summary.total_spent') / $users->count())
+            'total_sales' => $baseQuery->sum('total') ?? 0,
+            'total_orders' => $baseQuery->count(),
+            'average_order_value' => $baseQuery->count() > 0
+                ? round($baseQuery->sum('total') / $baseQuery->count())
                 : 0,
+            'total_customers' => $baseQuery->distinct('user_id')->count('user_id'),
+            'total_discount' => $baseQuery->sum('discount_amount') ?? 0,
         ];
 
-        return response()->json([
-            'data' => $reportData,
-            'summary' => $summary,
-            'filters' => $request->all(),
-        ]);
-    }
-
-    /**
-     * Product entry/exit (inventory movement) report
-     */
-    public function inventoryMovementReport(Request $request)
-    {
-        $productId = $request->product_id;
-
-        if (!$productId) {
-            return response()->json(['error' => 'شناسه محصول الزامی است'], 400);
-        }
-
-        $product = Product::with(['categories', 'variants.values.attribute'])->find($productId);
-
-        if (!$product) {
-            return response()->json(['error' => 'محصول یافت نشد'], 404);
-        }
-
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
-
-        // دریافت تمام آیتم‌های سفارش برای این محصول
-        $orderItemsQuery = OrderItem::where('product_id', $productId)
-            ->with(['order.user', 'variant.values.attribute']);
-
-        if ($request->filled('date_from')) {
-            $orderItemsQuery->whereHas('order', function ($q) use ($request) {
-                $q->whereDate('created_at', '>=', $request->date_from);
-            });
-        }
-
-        if ($request->filled('date_to')) {
-            $orderItemsQuery->whereHas('order', function ($q) use ($request) {
-                $q->whereDate('created_at', '<=', $request->date_to);
-            });
-        }
-
-        $orderItems = $orderItemsQuery->orderBy('created_at', 'desc')->get();
-
-        // داده‌های روزانه برای نمودار
-        $dailyMovements = OrderItem::where('product_id', $productId)
-            ->whereHas('order', function ($q) use ($request, $validStatuses) {
-                $q->where(function ($query) use ($validStatuses) {
-                    $query->whereIn('status', $validStatuses)
-                        ->orWhere('payment_status', 'paid');
-                });
-                if ($request->filled('date_from')) {
-                    $q->whereDate('created_at', '>=', $request->date_from);
-                }
-                if ($request->filled('date_to')) {
-                    $q->whereDate('created_at', '<=', $request->date_to);
-                }
-            })
-            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+        // فروش روزانه
+        $dailySales = $this->getSuccessfulOrdersQuery($filters)
             ->select(
-                DB::raw('DATE(orders.created_at) as date'),
-                DB::raw('SUM(order_items.quantity) as outgoing'),
-                DB::raw('COUNT(DISTINCT order_items.order_id) as orders_count'),
-                DB::raw('SUM(order_items.price * order_items.quantity) as revenue')
+                DB::raw('DATE(created_at) as date'),
+                DB::raw('SUM(total) as total_sales'),
+                DB::raw('COUNT(*) as total_orders'),
+                DB::raw('SUM(discount_amount) as total_discount')
             )
             ->groupBy('date')
-            ->orderBy('date')
+            ->orderBy('date', 'desc')
+            ->limit(30)
             ->get();
 
-        $report = [
-            'product' => [
-                'id' => $product->id,
-                'title' => $product->title,
-                'sku' => $product->sku,
-                'barcode' => $product->barcode,
-                'current_stock' => $product->stock,
-                'price' => $product->price,
-                'main_image' => $product->main_image,
-                'status' => $product->status,
-                'categories' => $product->categories->pluck('name'),
-                'variants' => $product->variants->map(function ($variant) {
-                    return [
-                        'id' => $variant->id,
-                        'sku' => $variant->sku,
-                        'price' => $variant->price,
-                        'stock' => $variant->stock,
-                        'attributes' => $variant->values->map(function ($value) {
-                            return $value->attribute->name . ': ' . $value->value;
-                        })->join(' - '),
-                    ];
-                }),
-            ],
-            'movements' => $orderItems->map(function ($item) {
-                return [
-                    'date' => $item->created_at->format('Y-m-d H:i'),
-                    'order_id' => $item->order_id,
-                    'customer' => $item->order->user->full_name ?? 'کاربر مهمان',
-                    'customer_mobile' => $item->order->user->mobile ?? '-',
-                    'quantity' => $item->quantity,
-                    'price' => $item->price,
-                    'total' => $item->price * $item->quantity,
-                    'variant' => $item->variant ? $item->variant->values->map(function ($value) {
-                        return $value->attribute->name . ': ' . $value->value;
-                    })->join(' - ') : null,
-                    'order_status' => $item->order->status,
-                    'payment_status' => $item->order->payment_status,
-                    'payment_method' => $item->order->payment_method,
-                ];
-            }),
-            'daily_movements' => $dailyMovements,
-            'summary' => [
-                'total_outgoing' => $orderItems->sum('quantity'),
-                'total_revenue' => $orderItems->sum(function ($item) {
-                    return $item->price * $item->quantity;
-                }),
-                'total_orders' => $orderItems->groupBy('order_id')->count(),
-                'current_stock' => $product->stock,
-                'total_customers' => $orderItems->groupBy('order.user_id')->count(),
-            ],
-            'filters' => $request->all(),
-        ];
-
-        return response()->json($report);
-    }
-
-    /**
-     * Get product sales summary (quick stats)
-     */
-    public function productSalesSummary(Request $request)
-    {
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
-
-        $query = Product::whereHas('orderItems', function ($q) use ($request, $validStatuses) {
-            $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
-                $q2->where(function ($query) use ($validStatuses) {
-                    $query->whereIn('status', $validStatuses)
-                        ->orWhere('payment_status', 'paid');
-                });
-                if ($request->filled('date_from')) {
-                    $q2->whereDate('created_at', '>=', $request->date_from);
-                }
-                if ($request->filled('date_to')) {
-                    $q2->whereDate('created_at', '<=', $request->date_to);
-                }
-            });
-        });
-
-        if ($request->filled('category_id')) {
-            $query->whereHas('categories', function ($q) use ($request) {
-                $q->where('categories.id', $request->category_id);
-            });
-        }
-
-        $salesData = $query->join('order_items', 'products.id', '=', 'order_items.product_id')
-            ->select(
-                DB::raw('COUNT(DISTINCT products.id) as products_with_sales'),
-                DB::raw('SUM(order_items.quantity) as total_items_sold'),
-                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
-                DB::raw('COUNT(DISTINCT order_items.order_id) as total_orders')
-            )
-            ->first();
-
-        $totalProducts = Product::count();
-        $productsWithoutSales = $totalProducts - ($salesData->products_with_sales ?? 0);
-
-        return response()->json([
-            'total_products' => $totalProducts,
-            'products_with_sales' => $salesData->products_with_sales ?? 0,
-            'products_without_sales' => $productsWithoutSales,
-            'total_items_sold' => $salesData->total_items_sold ?? 0,
-            'total_revenue' => $salesData->total_revenue ?? 0,
-            'total_orders' => $salesData->total_orders ?? 0,
-            'filters' => $request->all(),
-        ]);
-    }
-
-    /**
-     * Get top selling products
-     */
-    public function topSellingProducts(Request $request)
-    {
-        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
-        $limit = $request->filled('limit') ? $request->limit : 10;
-
-        $query = OrderItem::whereHas('order', function ($q) use ($request, $validStatuses) {
-            $q->where(function ($query) use ($validStatuses) {
-                $query->whereIn('status', $validStatuses)
-                    ->orWhere('payment_status', 'paid');
-            });
-            if ($request->filled('date_from')) {
-                $q->whereDate('created_at', '>=', $request->date_from);
-            }
-            if ($request->filled('date_to')) {
-                $q->whereDate('created_at', '<=', $request->date_to);
-            }
-        });
-
-        if ($request->filled('category_id')) {
-            $query->whereHas('product.categories', function ($q) use ($request) {
-                $q->where('categories.id', $request->category_id);
-            });
-        }
-
-        $products = $query->join('products', 'order_items.product_id', '=', 'products.id')
+        // محصولات پرفروش
+        $topProducts = $this->getSuccessfulOrderItemsQuery($filters)
+            ->join('products', 'order_items.product_id', '=', 'products.id')
             ->select(
                 'products.id',
                 'products.title',
                 'products.main_image',
-                'products.price',
-                'products.stock',
                 DB::raw('SUM(order_items.quantity) as total_quantity'),
                 DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
-                DB::raw('COUNT(DISTINCT order_items.order_id) as order_count'),
-                DB::raw('AVG(order_items.price) as average_price')
+                DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
             )
-            ->groupBy('products.id', 'products.title', 'products.main_image', 'products.price', 'products.stock')
+            ->groupBy('products.id', 'products.title', 'products.main_image')
             ->orderBy('total_revenue', 'desc')
-            ->limit($limit)
+            ->limit(10)
             ->get();
 
-        return response()->json($products);
+        // فروش به تفکیک روش پرداخت
+        $paymentMethods = $this->getSuccessfulOrdersQuery($filters)
+            ->select(
+                'payment_method',
+                DB::raw('COUNT(*) as orders_count'),
+                DB::raw('SUM(total) as total_amount'),
+                DB::raw('AVG(total) as average_amount')
+            )
+            ->groupBy('payment_method')
+            ->get();
+
+        // فروش به تفکیک وضعیت
+        $ordersByStatus = Order::when(!empty($filters['date_from']), function ($q) use ($filters) {
+            return $q->whereDate('created_at', '>=', $filters['date_from']);
+        })
+            ->when(!empty($filters['date_to']), function ($q) use ($filters) {
+                return $q->whereDate('created_at', '<=', $filters['date_to']);
+            })
+            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as total_amount'))
+            ->groupBy('status')
+            ->get();
+
+        return response()->json([
+            'summary' => $summary,
+            'daily_sales' => $dailySales,
+            'top_products' => $topProducts,
+            'payment_methods' => $paymentMethods,
+            'orders_by_status' => $ordersByStatus,
+            'filters' => $filters,
+        ]);
+    }
+
+    /**
+     * گزارش جامع سفارشات با فیلترهای پیشرفته
+     */
+    public function orderReport(Request $request)
+    {
+        $filters = $request->all();
+
+        // کوئری پایه سفارشات
+        $query = Order::query()
+            ->with([
+                'user',
+                'address',
+                'address.province',
+                'address.city',
+                'shipping',
+                'items.product',
+                'items.variant.values.attribute',
+                'coupon'
+            ]);
+
+        // ============ فیلترهای پایه ============
+
+        // فیلتر تاریخ شروع
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+
+        // فیلتر تاریخ پایان
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+
+        // فیلتر وضعیت سفارش
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        // فیلتر وضعیت پرداخت
+        if ($request->filled('payment_status')) {
+            $query->where('payment_status', $request->payment_status);
+        }
+
+        // فیلتر روش پرداخت
+        if ($request->filled('payment_method')) {
+            $query->where('payment_method', $request->payment_method);
+        }
+
+        // ============ فیلترهای پیشرفته ============
+
+        // فیلتر بر اساس استان (از طریق آدرس)
+        if ($request->filled('province')) {
+            $query->whereHas('address.province', function ($q) use ($request) {
+                $q->where('name', 'like', "%{$request->province}%");
+            });
+        }
+
+        // فیلتر بر اساس شهر (از طریق آدرس)
+        if ($request->filled('city')) {
+            $query->whereHas('address.city', function ($q) use ($request) {
+                $q->where('name', 'like', "%{$request->city}%");
+            });
+        }
+
+        // فیلتر بر اساس روش حمل و نقل
+        if ($request->filled('shipping_method_id')) {
+            $query->where('shipping_id', $request->shipping_method_id);
+        }
+
+        // فیلتر بر اساس کاربر
+        if ($request->filled('user_id')) {
+            $query->where('user_id', $request->user_id);
+        }
+
+        // فیلتر بر اساس بازه قیمت
+        if ($request->filled('min_total')) {
+            $query->where('total', '>=', $request->min_total);
+        }
+        if ($request->filled('max_total')) {
+            $query->where('total', '<=', $request->max_total);
+        }
+
+        // فیلتر بر اساس وجود کد تخفیف
+        if ($request->filled('has_coupon')) {
+            if ($request->has_coupon) {
+                $query->whereNotNull('coupon_id');
+            } else {
+                $query->whereNull('coupon_id');
+            }
+        }
+
+        // فیلتر بر اساس مقدار تخفیف
+        if ($request->filled('min_discount')) {
+            $query->where('discount_amount', '>=', $request->min_discount);
+        }
+        if ($request->filled('max_discount')) {
+            $query->where('discount_amount', '<=', $request->max_discount);
+        }
+
+        // ============ مرتب‌سازی ============
+        $sortBy = $request->filled('sort_by') ? $request->sort_by : 'created_at';
+        $sortOrder = $request->filled('sort_order') ? $request->sort_order : 'desc';
+
+        $validSortFields = ['id', 'total', 'created_at', 'status', 'payment_status', 'discount_amount'];
+        if (in_array($sortBy, $validSortFields)) {
+            $query->orderBy($sortBy, $sortOrder);
+        } else {
+            $query->orderBy('created_at', 'desc');
+        }
+
+        // ============ دریافت داده‌ها ============
+        $perPage = $request->filled('per_page') ? $request->per_page : 20;
+        $orders = $query->paginate($perPage);
+
+        // ============ داده‌های نمودار ============
+
+        // 1. نمودار فروش روزانه
+        $dailySalesChart = $this->getOrderDailyChart($filters);
+
+        // 2. نمودار فروش به تفکیک وضعیت
+        $statusChart = $this->getOrderStatusChart($filters);
+
+        // 3. نمودار فروش به تفکیک روش پرداخت
+        $paymentMethodChart = $this->getOrderPaymentMethodChart($filters);
+
+        // 4. نمودار فروش به تفکیک استان‌ها
+        $provinceChart = $this->getOrderProvinceChart($filters);
+
+        // 5. نمودار فروش به تفکیک روش حمل و نقل
+        $shippingChart = $this->getOrderShippingChart($filters);
+
+        // 6. نمودار فروش ماهانه
+        $monthlyChart = $this->getOrderMonthlyChart($filters);
+
+        // ============ خلاصه آماری ============
+        $summary = $this->getOrderSummary($filters);
+
+        // ============ اطلاعات اضافی برای فیلترها ============
+        $filterOptions = [
+            'statuses' => $this->getOrderStatuses(),
+            'payment_methods' => $this->getPaymentMethods(),
+            'payment_statuses' => $this->getPaymentStatuses(),
+            'provinces' => $this->getProvinces(),
+            'shipping_methods' => $this->getShippingMethods(),
+        ];
+
+        return response()->json([
+            'data' => $orders,
+            'summary' => $summary,
+            'charts' => [
+                'daily_sales' => $dailySalesChart,
+                'monthly_sales' => $monthlyChart,
+                'status' => $statusChart,
+                'payment_method' => $paymentMethodChart,
+                'province' => $provinceChart,
+                'shipping' => $shippingChart,
+            ],
+            'filter_options' => $filterOptions,
+            'filters' => $filters,
+        ]);
+    }
+
+
+    /**
+     * دریافت خلاصه آماری سفارشات
+     */
+    private function getOrderSummary($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return [
+            'total_orders' => $query->count(),
+            'total_revenue' => $query->sum('total') ?? 0,
+            'total_discount' => $query->sum('discount_amount') ?? 0,
+            'average_order_value' => $query->count() > 0
+                ? round($query->sum('total') / $query->count())
+                : 0,
+            'max_order_value' => $query->max('total') ?? 0,
+            'min_order_value' => $query->min('total') ?? 0,
+            'total_items' => OrderItem::whereHas('order', function ($q) use ($filters) {
+                $this->applyOrderFilters($q, $filters);
+            })->sum('quantity') ?? 0,
+            'unique_customers' => $query->distinct('user_id')->count('user_id'),
+        ];
+    }
+
+    /**
+     * ساخت کوئری سفارشات با فیلترها
+     */
+    private function buildOrderQuery($filters)
+    {
+        $query = Order::query();
+        $this->applyOrderFilters($query, $filters);
+        return $query;
+    }
+
+    /**
+     * اعمال فیلترها روی کوئری سفارشات
+     */
+    private function applyOrderFilters($query, $filters)
+    {
+        // فیلتر تاریخ
+        if (!empty($filters['date_from'])) {
+            $query->whereDate('created_at', '>=', $filters['date_from']);
+        }
+        if (!empty($filters['date_to'])) {
+            $query->whereDate('created_at', '<=', $filters['date_to']);
+        }
+
+        // فیلتر وضعیت
+        if (!empty($filters['status'])) {
+            $query->where('orders.status', $filters['status']);
+        }
+
+        // فیلتر وضعیت پرداخت - با نام جدول
+        if (!empty($filters['payment_status'])) {
+            $query->where('orders.payment_status', $filters['payment_status']);
+        }
+
+        // فیلتر روش پرداخت - با نام جدول
+        if (!empty($filters['payment_method'])) {
+            $query->where('orders.payment_method', $filters['payment_method']);
+        }
+
+        // فیلتر استان
+        if (!empty($filters['province'])) {
+            $query->whereHas('address.province', function ($q) use ($filters) {
+                $q->where('name', 'like', "%{$filters['province']}%");
+            });
+        }
+
+        // فیلتر شهر
+        if (!empty($filters['city'])) {
+            $query->whereHas('address.city', function ($q) use ($filters) {
+                $q->where('name', 'like', "%{$filters['city']}%");
+            });
+        }
+
+        // فیلتر روش حمل
+        if (!empty($filters['shipping_method_id'])) {
+            $query->where('shipping_id', $filters['shipping_method_id']);
+        }
+
+        // فیلتر کاربر
+        if (!empty($filters['user_id'])) {
+            $query->where('user_id', $filters['user_id']);
+        }
+
+        // فیلتر قیمت
+        if (!empty($filters['min_total'])) {
+            $query->where('total', '>=', $filters['min_total']);
+        }
+        if (!empty($filters['max_total'])) {
+            $query->where('total', '<=', $filters['max_total']);
+        }
+    }
+
+    /**
+     * نمودار فروش روزانه
+     */
+    private function getOrderDailyChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->select(
+            DB::raw('DATE(created_at) as date'),
+            DB::raw('COUNT(*) as orders_count'),
+            DB::raw('SUM(total) as total_sales'),
+            DB::raw('SUM(discount_amount) as total_discount'),
+            DB::raw('AVG(total) as average_order')
+        )
+            ->groupBy('date')
+            ->orderBy('date', 'desc')
+            ->limit(30)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'date' => $item->date,
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                    'total_discount' => (float) $item->total_discount,
+                    'average_order' => (float) $item->average_order,
+                ];
+            });
+    }
+
+    /**
+     * نمودار فروش ماهانه
+     */
+    private function getOrderMonthlyChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->select(
+            DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
+            DB::raw('COUNT(*) as orders_count'),
+            DB::raw('SUM(total) as total_sales'),
+            DB::raw('SUM(discount_amount) as total_discount')
+        )
+            ->groupBy('month')
+            ->orderBy('month', 'desc')
+            ->limit(12)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'month' => $item->month,
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                    'total_discount' => (float) $item->total_discount,
+                ];
+            });
+    }
+    /**
+     * نمودار فروش به تفکیک وضعیت
+     */
+    private function getOrderStatusChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->select(
+            'status',
+            DB::raw('COUNT(*) as orders_count'),
+            DB::raw('SUM(total) as total_sales')
+        )
+            ->groupBy('status')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'status' => $item->status,
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                ];
+            });
+    }
+
+    /**
+     * نمودار فروش به تفکیک روش پرداخت
+     */
+    private function getOrderPaymentMethodChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->select(
+            'payment_method',
+            DB::raw('COUNT(*) as orders_count'),
+            DB::raw('SUM(total) as total_sales')
+        )
+            ->groupBy('payment_method')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'payment_method' => $item->payment_method,
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                ];
+            });
+    }
+
+    /**
+     * نمودار فروش به تفکیک استان‌ها
+     */
+    private function getOrderProvinceChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->join('addresses', 'orders.address_id', '=', 'addresses.id')
+            ->join('provinces', 'addresses.province_id', '=', 'provinces.id')
+            ->select(
+                'provinces.name as province_name',
+                DB::raw('COUNT(*) as orders_count'),
+                DB::raw('SUM(orders.total) as total_sales')
+            )
+            ->groupBy('provinces.name')
+            ->orderBy('total_sales', 'desc')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'province' => $item->province_name ?? 'نامشخص',
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                ];
+            });
+    }
+
+    /**
+     * نمودار فروش به تفکیک روش حمل و نقل
+     */
+    private function getOrderShippingChart($filters)
+    {
+        $query = $this->buildOrderQuery($filters);
+
+        return $query->join('shippings', 'orders.shipping_id', '=', 'shippings.id')
+            ->select(
+                'shippings.title as shipping_title',
+                DB::raw('COUNT(*) as orders_count'),
+                DB::raw('SUM(orders.total) as total_sales')
+            )
+            ->groupBy('shippings.title')
+            ->orderBy('total_sales', 'desc')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'shipping_method' => $item->shipping_title ?? 'نامشخص',
+                    'orders_count' => (int) $item->orders_count,
+                    'total_sales' => (float) $item->total_sales,
+                ];
+            });
+    }
+
+    private function getProvinces()
+    {
+        return Province::pluck('name')->toArray();
+    }
+
+    /**
+     * دریافت لیست شهرها بر اساس استان
+     */
+    public function getCitiesByProvince(Request $request)
+    {
+        if (!$request->filled('province_id')) {
+            return response()->json(['error' => 'شناسه استان الزامی است'], 400);
+        }
+
+        $cities = City::where('province_id', $request->province_id)
+            ->pluck('name')
+            ->toArray();
+
+        return response()->json($cities);
+    }
+
+    /**
+     * دریافت لیست روش‌های حمل و نقل
+     */
+    private function getShippingMethods()
+    {
+        return Shipping::select('id', 'title as name')
+            ->where('status', 1)
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'id' => $item->id,
+                    'name' => $item->name,
+                ];
+            });
+    }
+
+    /**
+     * دریافت لیست وضعیت‌های سفارش
+     */
+    private function getOrderStatuses()
+    {
+        return [
+            ['value' => 'pending', 'label' => 'در انتظار'],
+            ['value' => 'reserved', 'label' => 'رزرو شده'],
+            ['value' => 'processing', 'label' => 'در حال پردازش'],
+            ['value' => 'paid', 'label' => 'پرداخت شده'],
+            ['value' => 'shipped', 'label' => 'ارسال شده'],
+            ['value' => 'completed', 'label' => 'تکمیل شده'],
+            ['value' => 'canceled', 'label' => 'لغو شده'],
+            ['value' => 'returned', 'label' => 'مرجوعی'],
+        ];
+    }
+
+    /**
+     * دریافت لیست روش‌های پرداخت
+     */
+    private function getPaymentMethods()
+    {
+        return [
+            ['value' => 'online', 'label' => 'پرداخت آنلاین'],
+            ['value' => 'wallet', 'label' => 'کیف پول'],
+            ['value' => 'cod', 'label' => 'پرداخت در محل'],
+            ['value' => 'card_transfer', 'label' => 'کارت به کارت'],
+        ];
+    }
+
+    /**
+     * دریافت لیست وضعیت‌های پرداخت
+     */
+    private function getPaymentStatuses()
+    {
+        return [
+            ['value' => 'pending', 'label' => 'در انتظار پرداخت'],
+            ['value' => 'paid', 'label' => 'پرداخت شده'],
+            ['value' => 'failed', 'label' => 'ناموفق'],
+            ['value' => 'refunded', 'label' => 'برگشت داده شده'],
+        ];
     }
 }
