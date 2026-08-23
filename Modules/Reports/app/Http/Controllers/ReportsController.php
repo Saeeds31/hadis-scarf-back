@@ -10,18 +10,166 @@ use Modules\Orders\Models\Order;
 use Modules\Orders\Models\OrderItem;
 use Modules\Products\Models\Product;
 use Modules\Users\Models\User;
+use Modules\Categories\Models\Category;
 
 class ReportsController extends Controller
 {
+    /**
+     * Dashboard summary with charts
+     */
+    public function dashboardReport(Request $request)
+    {
+        // وضعیت‌های معتبر برای سفارشات موفق
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+
+        // کوئری پایه برای سفارشات موفق
+        $baseQuery = Order::where(function ($query) use ($validStatuses) {
+            $query->whereIn('status', $validStatuses)
+                ->orWhere('payment_status', 'paid');
+        });
+
+        // اعمال فیلتر تاریخ
+        if ($request->filled('date_from')) {
+            $baseQuery->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $baseQuery->whereDate('created_at', '<=', $request->date_to);
+        }
+
+        // آمار خلاصه
+        $summary = [
+            'total_sales' => $baseQuery->sum('total') ?? 0,
+            'total_orders' => $baseQuery->count(),
+            'average_order_value' => $baseQuery->count() > 0
+                ? round($baseQuery->sum('total') / $baseQuery->count())
+                : 0,
+            'total_customers' => $baseQuery->distinct('user_id')->count('user_id'),
+            'total_discount' => $baseQuery->sum('discount_amount') ?? 0,
+        ];
+
+        // فروش روزانه (نمودار)
+        $dailySales = Order::where(function ($query) use ($validStatuses) {
+            $query->whereIn('status', $validStatuses)
+                ->orWhere('payment_status', 'paid');
+        })
+            ->when($request->filled('date_from'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '>=', $request->date_from);
+            })
+            ->when($request->filled('date_to'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '<=', $request->date_to);
+            })
+            ->select(
+                DB::raw('DATE(created_at) as date'),
+                DB::raw('SUM(total) as total_sales'),
+                DB::raw('COUNT(*) as total_orders'),
+                DB::raw('SUM(discount_amount) as total_discount')
+            )
+            ->groupBy('date')
+            ->orderBy('date', 'desc')
+            ->limit(30)
+            ->get();
+
+        // محصولات پرفروش
+        $topProducts = OrderItem::whereHas('order', function ($q) use ($request, $validStatuses) {
+            $q->where(function ($query) use ($validStatuses) {
+                $query->whereIn('status', $validStatuses)
+                    ->orWhere('payment_status', 'paid');
+            });
+            if ($request->filled('date_from')) {
+                $q->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $q->whereDate('created_at', '<=', $request->date_to);
+            }
+        })
+            ->join('products', 'order_items.product_id', '=', 'products.id')
+            ->select(
+                'products.id',
+                'products.title',
+                'products.main_image',
+                DB::raw('SUM(order_items.quantity) as total_quantity'),
+                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
+                DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
+            )
+            ->groupBy('products.id', 'products.title', 'products.main_image')
+            ->orderBy('total_revenue', 'desc')
+            ->limit(10)
+            ->get();
+
+        // فروش به تفکیک روش پرداخت
+        $paymentMethods = Order::where(function ($query) use ($validStatuses) {
+            $query->whereIn('status', $validStatuses)
+                ->orWhere('payment_status', 'paid');
+        })
+            ->when($request->filled('date_from'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '>=', $request->date_from);
+            })
+            ->when($request->filled('date_to'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '<=', $request->date_to);
+            })
+            ->select(
+                'payment_method',
+                DB::raw('COUNT(*) as orders_count'),
+                DB::raw('SUM(total) as total_amount'),
+                DB::raw('AVG(total) as average_amount')
+            )
+            ->groupBy('payment_method')
+            ->get();
+
+        // فروش به تفکیک وضعیت
+        $ordersByStatus = Order::when($request->filled('date_from'), function ($q) use ($request) {
+            return $q->whereDate('created_at', '>=', $request->date_from);
+        })
+            ->when($request->filled('date_to'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '<=', $request->date_to);
+            })
+            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as total_amount'))
+            ->groupBy('status')
+            ->get();
+
+        // فروش ماهانه (برای نمودار)
+        $monthlySales = Order::where(function ($query) use ($validStatuses) {
+            $query->whereIn('status', $validStatuses)
+                ->orWhere('payment_status', 'paid');
+        })
+            ->when($request->filled('date_from'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '>=', $request->date_from);
+            })
+            ->when($request->filled('date_to'), function ($q) use ($request) {
+                return $q->whereDate('created_at', '<=', $request->date_to);
+            })
+            ->select(
+                DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
+                DB::raw('SUM(total) as total_sales'),
+                DB::raw('COUNT(*) as total_orders')
+            )
+            ->groupBy('month')
+            ->orderBy('month', 'desc')
+            ->limit(12)
+            ->get();
+
+        return response()->json([
+            'summary' => $summary,
+            'daily_sales' => $dailySales,
+            'monthly_sales' => $monthlySales,
+            'top_products' => $topProducts,
+            'payment_methods' => $paymentMethods,
+            'orders_by_status' => $ordersByStatus,
+            'filters' => $request->all(),
+        ]);
+    }
+
     /**
      * Comprehensive Product Report with In/Out/Stock
      */
     public function productInventoryReport(Request $request)
     {
-        $query = Product::query()
-            ->with(['categories', 'variants']);
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
 
-        // Filters
+        $query = Product::query()
+            ->with(['categories', 'variants.values.attribute']);
+
+        // فیلترها
         if ($request->filled('category_id')) {
             $query->whereHas('categories', function ($q) use ($request) {
                 $q->where('categories.id', $request->category_id);
@@ -36,55 +184,93 @@ class ReportsController extends Controller
             $query->where('status', $request->status);
         }
 
-        if ($request->filled('date_from')) {
-            $query->whereDate('created_at', '>=', $request->date_from);
+        if ($request->filled('search')) {
+            $query->where(function ($q) use ($request) {
+                $q->where('title', 'like', "%{$request->search}%")
+                    ->orWhere('sku', 'like', "%{$request->search}%")
+                    ->orWhere('barcode', 'like', "%{$request->search}%");
+            });
         }
 
-        if ($request->filled('date_to')) {
-            $query->whereDate('created_at', '<=', $request->date_to);
+        if ($request->filled('min_price')) {
+            $query->where('price', '>=', $request->min_price);
         }
 
-        // Get products with their inventory data
+        if ($request->filled('max_price')) {
+            $query->where('price', '<=', $request->max_price);
+        }
+
+        // دریافت محصولات
         $products = $query->get();
 
-        $reportData = $products->map(function ($product) use ($request) {
-            // Base query for order items
+        $reportData = $products->map(function ($product) use ($request, $validStatuses) {
+            // کوئری پایه برای آیتم‌های سفارش
             $orderItemsQuery = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) {
-                    $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                        ->orWhere('payment_status', 'paid');
+                ->whereHas('order', function ($q) use ($validStatuses) {
+                    $q->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
                 });
 
-            // Apply date filters to order items
+            // اعمال فیلتر تاریخ
             if ($request->filled('date_from')) {
                 $orderItemsQuery->whereHas('order', function ($q) use ($request) {
                     $q->whereDate('created_at', '>=', $request->date_from);
                 });
             }
-
             if ($request->filled('date_to')) {
                 $orderItemsQuery->whereHas('order', function ($q) use ($request) {
                     $q->whereDate('created_at', '<=', $request->date_to);
                 });
             }
 
-            // Calculate sales data
+            // محاسبه آمار فروش
             $salesData = $orderItemsQuery->select(
                 DB::raw('SUM(quantity) as total_quantity'),
                 DB::raw('SUM(price * quantity) as total_revenue'),
                 DB::raw('COUNT(DISTINCT order_id) as total_orders')
             )->first();
 
-            // Get recent sales with buyer info
-            $recentSales = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request) {
-                    $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                        ->orWhere('payment_status', 'paid');
-
+            // فروش به ازای هر شخص
+            $perPersonSales = OrderItem::where('product_id', $product->id)
+                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                    $q->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
                     if ($request->filled('date_from')) {
                         $q->whereDate('created_at', '>=', $request->date_from);
                     }
+                    if ($request->filled('date_to')) {
+                        $q->whereDate('created_at', '<=', $request->date_to);
+                    }
+                })
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->join('users', 'orders.user_id', '=', 'users.id')
+                ->select(
+                    'users.id as user_id',
+                    'users.full_name',
+                    'users.mobile',
+                    DB::raw('SUM(order_items.quantity) as total_quantity'),
+                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent'),
+                    DB::raw('COUNT(DISTINCT orders.id) as order_count')
+                )
+                ->groupBy('users.id', 'users.full_name', 'users.mobile')
+                ->orderBy('total_quantity', 'desc')
+                ->limit(10)
+                ->get();
 
+            // فروش‌های اخیر
+            $recentSales = OrderItem::where('product_id', $product->id)
+                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                    $q->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
+                    if ($request->filled('date_from')) {
+                        $q->whereDate('created_at', '>=', $request->date_from);
+                    }
                     if ($request->filled('date_to')) {
                         $q->whereDate('created_at', '<=', $request->date_to);
                     }
@@ -97,56 +283,26 @@ class ReportsController extends Controller
                     return [
                         'order_id' => $item->order_id,
                         'customer_name' => $item->order->user->full_name ?? 'کاربر مهمان',
+                        'customer_mobile' => $item->order->user->mobile ?? '-',
                         'quantity' => $item->quantity,
                         'price_per_unit' => $item->price,
                         'total_price' => $item->price * $item->quantity,
                         'sold_at' => $item->order->created_at->format('Y-m-d H:i'),
                         'order_status' => $item->order->status,
+                        'payment_status' => $item->order->payment_status,
                     ];
                 });
 
-            // Calculate total incoming (purchases/restocks) - assuming you have a purchase model
-            // If you don't have purchase model, you can add a field in product or variant
-            $totalIncoming = $product->stock + ($salesData->total_quantity ?? 0); // This is logic based on current stock
-
-            // Per person sales report (top customers for this product)
-            $perPersonSales = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request) {
-                    $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                        ->orWhere('payment_status', 'paid');
-
-                    if ($request->filled('date_from')) {
-                        $q->whereDate('created_at', '>=', $request->date_from);
-                    }
-
-                    if ($request->filled('date_to')) {
-                        $q->whereDate('created_at', '<=', $request->date_to);
-                    }
-                })
-                ->join('orders', 'order_items.order_id', '=', 'orders.id')
-                ->join('users', 'orders.user_id', '=', 'users.id')
-                ->select(
-                    'users.id as user_id',
-                    'users.full_name',
-                    DB::raw('SUM(order_items.quantity) as total_quantity'),
-                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent'),
-                    DB::raw('COUNT(DISTINCT orders.id) as order_count')
-                )
-                ->groupBy('users.id', 'users.full_name')
-                ->orderBy('total_quantity', 'desc')
-                ->limit(10)
-                ->get();
-
-            // Chart data for this product (sales over time)
+            // داده‌های نمودار (فروش روزانه)
             $chartData = OrderItem::where('product_id', $product->id)
-                ->whereHas('order', function ($q) use ($request) {
-                    $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                        ->orWhere('payment_status', 'paid');
-
+                ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                    $q->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
                     if ($request->filled('date_from')) {
                         $q->whereDate('created_at', '>=', $request->date_from);
                     }
-
                     if ($request->filled('date_to')) {
                         $q->whereDate('created_at', '<=', $request->date_to);
                     }
@@ -161,6 +317,9 @@ class ReportsController extends Controller
                 ->orderBy('date')
                 ->get();
 
+            // محاسبه موجودی ورودی (بر اساس فروش + موجودی فعلی)
+            $totalIncoming = $product->stock + ($salesData->total_quantity ?? 0);
+
             return [
                 'product' => [
                     'id' => $product->id,
@@ -169,6 +328,8 @@ class ReportsController extends Controller
                     'barcode' => $product->barcode,
                     'price' => $product->price,
                     'stock' => $product->stock,
+                    'main_image' => $product->main_image,
+                    'status' => $product->status,
                     'categories' => $product->categories->pluck('name'),
                     'variants' => $product->variants->map(function ($variant) {
                         return [
@@ -183,7 +344,7 @@ class ReportsController extends Controller
                     }),
                 ],
                 'inventory_summary' => [
-                    'total_incoming' => $totalIncoming, // From purchases/restocks
+                    'total_incoming' => $totalIncoming,
                     'total_outgoing' => $salesData->total_quantity ?? 0,
                     'current_stock' => $product->stock,
                 ],
@@ -201,12 +362,18 @@ class ReportsController extends Controller
             ];
         });
 
-        // Summary statistics for all products in the report
+        // خلاصه آماری کل
         $summary = [
             'total_products' => $products->count(),
             'total_stock' => $products->sum('stock'),
             'total_revenue' => $reportData->sum('sales_summary.total_revenue'),
             'total_items_sold' => $reportData->sum('sales_summary.total_quantity_sold'),
+            'products_with_sales' => $reportData->filter(function ($item) {
+                return $item['sales_summary']['total_quantity_sold'] > 0;
+            })->count(),
+            'products_without_sales' => $reportData->filter(function ($item) {
+                return $item['sales_summary']['total_quantity_sold'] == 0;
+            })->count(),
         ];
 
         return response()->json([
@@ -217,18 +384,21 @@ class ReportsController extends Controller
     }
 
     /**
-     * Detailed sales report by product
+     * Detailed sales report by product with pagination
      */
     public function productDetailedReport(Request $request)
     {
-        $query = Product::query()
-            ->with(['categories', 'variants'])
-            ->withCount([
-                'orderItems as total_sold' => function ($q) use ($request) {
-                    $q->whereHas('order', function ($q2) use ($request) {
-                        $q2->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                            ->orWhere('payment_status', 'paid');
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
 
+        $query = Product::query()
+            ->with(['categories', 'variants.values.attribute'])
+            ->withCount([
+                'orderItems as total_sold' => function ($q) use ($request, $validStatuses) {
+                    $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
+                        $q2->where(function ($query) use ($validStatuses) {
+                            $query->whereIn('status', $validStatuses)
+                                ->orWhere('payment_status', 'paid');
+                        });
                         if ($request->filled('date_from')) {
                             $q2->whereDate('created_at', '>=', $request->date_from);
                         }
@@ -239,11 +409,12 @@ class ReportsController extends Controller
                 }
             ])
             ->withSum([
-                'orderItems as total_revenue' => function ($q) use ($request) {
-                    $q->whereHas('order', function ($q2) use ($request) {
-                        $q2->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                            ->orWhere('payment_status', 'paid');
-
+                'orderItems as total_revenue' => function ($q) use ($request, $validStatuses) {
+                    $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
+                        $q2->where(function ($query) use ($validStatuses) {
+                            $query->whereIn('status', $validStatuses)
+                                ->orWhere('payment_status', 'paid');
+                        });
                         if ($request->filled('date_from')) {
                             $q2->whereDate('created_at', '>=', $request->date_from);
                         }
@@ -254,7 +425,7 @@ class ReportsController extends Controller
                 }
             ], 'price');
 
-        // Apply filters
+        // اعمال فیلترها
         if ($request->filled('category_id')) {
             $query->whereHas('categories', function ($q) use ($request) {
                 $q->where('categories.id', $request->category_id);
@@ -270,8 +441,11 @@ class ReportsController extends Controller
         }
 
         if ($request->filled('search')) {
-            $query->where('title', 'like', "%{$request->search}%")
-                ->orWhere('sku', 'like', "%{$request->search}%");
+            $query->where(function ($q) use ($request) {
+                $q->where('title', 'like', "%{$request->search}%")
+                    ->orWhere('sku', 'like', "%{$request->search}%")
+                    ->orWhere('barcode', 'like', "%{$request->search}%");
+            });
         }
 
         if ($request->filled('min_sold')) {
@@ -286,11 +460,20 @@ class ReportsController extends Controller
             $query->where('price', '<=', $request->max_price);
         }
 
+        if ($request->filled('only_with_sales')) {
+            $query->having('total_sold', '>', 0);
+        }
+
+        if ($request->filled('only_without_sales')) {
+            $query->having('total_sold', '=', 0);
+        }
+
+        // مرتب‌سازی
         if ($request->filled('sort_by')) {
             $sortField = $request->sort_by;
             $sortOrder = $request->sort_order ?? 'desc';
 
-            if (in_array($sortField, ['total_sold', 'total_revenue', 'price', 'stock'])) {
+            if (in_array($sortField, ['total_sold', 'total_revenue', 'price', 'stock', 'created_at'])) {
                 $query->orderBy($sortField, $sortOrder);
             } else {
                 $query->orderBy($sortField, $sortOrder);
@@ -299,20 +482,40 @@ class ReportsController extends Controller
             $query->orderBy('total_sold', 'desc');
         }
 
-        $products = $query->paginate($request->per_page ?? 20);
+        $perPage = $request->filled('per_page') ? $request->per_page : 20;
+        $products = $query->paginate($perPage);
 
-        return response()->json($products);
+        // اضافه کردن خلاصه آماری به پاسخ
+        $summary = [
+            'total_products' => $products->total(),
+            'total_revenue' => $products->sum('total_revenue'),
+            'total_items_sold' => $products->sum('total_sold'),
+        ];
+
+        return response()->json([
+            'data' => $products->items(),
+            'summary' => $summary,
+            'pagination' => [
+                'current_page' => $products->currentPage(),
+                'last_page' => $products->lastPage(),
+                'per_page' => $products->perPage(),
+                'total' => $products->total(),
+            ],
+            'filters' => $request->all(),
+        ]);
     }
 
     /**
-     * User purchase report - how much each person bought in a date range
+     * User purchase report - how much each person bought
      */
     public function userPurchaseReport(Request $request)
     {
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+
         $query = User::query()
             ->with(['addresses', 'roles', 'wallet']);
 
-        // Filters
+        // فیلترها
         if ($request->filled('role_id')) {
             $query->whereHas('roles', function ($q) use ($request) {
                 $q->where('roles.id', $request->role_id);
@@ -327,42 +530,64 @@ class ReportsController extends Controller
             $query->where('full_name', 'like', "%{$request->full_name}%");
         }
 
-        // Get users with their purchase statistics
+        if ($request->filled('national_code')) {
+            $query->where('national_code', 'like', "%{$request->national_code}%");
+        }
+
+        if ($request->filled('has_wallet')) {
+            if ($request->has_wallet) {
+                $query->has('wallet');
+            } else {
+                $query->doesntHave('wallet');
+            }
+        }
+
+        // دریافت کاربران
         $users = $query->get();
 
-        $reportData = $users->map(function ($user) use ($request) {
+        $reportData = $users->map(function ($user) use ($request, $validStatuses) {
+            // کوئری سفارشات کاربر
             $ordersQuery = Order::where('user_id', $user->id)
-                ->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                ->orWhere('payment_status', 'paid');
+                ->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
 
             if ($request->filled('date_from')) {
                 $ordersQuery->whereDate('created_at', '>=', $request->date_from);
             }
-
             if ($request->filled('date_to')) {
                 $ordersQuery->whereDate('created_at', '<=', $request->date_to);
             }
 
             $orders = $ordersQuery->with(['items.product'])->get();
 
+            // داده‌های خرید
             $purchaseData = [
                 'total_orders' => $orders->count(),
                 'total_items' => $orders->sum(function ($order) {
                     return $order->items->sum('quantity');
                 }),
                 'total_spent' => $orders->sum('total'),
-                'average_order_value' => $orders->count() > 0 ? round($orders->sum('total') / $orders->count()) : 0,
+                'average_order_value' => $orders->count() > 0
+                    ? round($orders->sum('total') / $orders->count())
+                    : 0,
                 'first_purchase' => $orders->min('created_at'),
                 'last_purchase' => $orders->max('created_at'),
                 'orders' => $orders->map(function ($order) {
                     return [
                         'order_id' => $order->id,
                         'total' => $order->total,
+                        'status' => $order->status,
+                        'payment_status' => $order->payment_status,
+                        'payment_method' => $order->payment_method,
                         'items' => $order->items->map(function ($item) {
                             return [
                                 'product' => $item->product->title ?? 'محصول حذف شده',
+                                'product_id' => $item->product_id,
                                 'quantity' => $item->quantity,
                                 'price' => $item->price,
+                                'total' => $item->price * $item->quantity,
                             ];
                         }),
                         'created_at' => $order->created_at->format('Y-m-d H:i'),
@@ -370,16 +595,16 @@ class ReportsController extends Controller
                 }),
             ];
 
-            // Top purchased products by this user
-            $topProducts = OrderItem::whereHas('order', function ($q) use ($user, $request) {
+            // محصولات پرفروش این کاربر
+            $topProducts = OrderItem::whereHas('order', function ($q) use ($user, $request, $validStatuses) {
                 $q->where('user_id', $user->id)
-                    ->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                    ->orWhere('payment_status', 'paid');
-
+                    ->where(function ($query) use ($validStatuses) {
+                        $query->whereIn('status', $validStatuses)
+                            ->orWhere('payment_status', 'paid');
+                    });
                 if ($request->filled('date_from')) {
                     $q->whereDate('created_at', '>=', $request->date_from);
                 }
-
                 if ($request->filled('date_to')) {
                     $q->whereDate('created_at', '<=', $request->date_to);
                 }
@@ -389,7 +614,8 @@ class ReportsController extends Controller
                     'products.id',
                     'products.title',
                     DB::raw('SUM(order_items.quantity) as total_quantity'),
-                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent')
+                    DB::raw('SUM(order_items.price * order_items.quantity) as total_spent'),
+                    DB::raw('COUNT(DISTINCT order_items.order_id) as order_count')
                 )
                 ->groupBy('products.id', 'products.title')
                 ->orderBy('total_quantity', 'desc')
@@ -402,20 +628,25 @@ class ReportsController extends Controller
                     'full_name' => $user->full_name,
                     'mobile' => $user->mobile,
                     'national_code' => $user->national_code,
+                    'birth_date' => $user->birth_date,
                     'roles' => $user->roles->pluck('name'),
                     'wallet_balance' => $user->wallet?->balance ?? 0,
+                    'has_wallet' => $user->wallet ? true : false,
                 ],
                 'purchase_summary' => $purchaseData,
                 'top_products' => $topProducts,
             ];
         });
 
-        // Summary statistics
+        // خلاصه آماری کل
         $summary = [
             'total_users' => $users->count(),
             'total_orders' => $reportData->sum('purchase_summary.total_orders'),
             'total_spent' => $reportData->sum('purchase_summary.total_spent'),
             'total_items' => $reportData->sum('purchase_summary.total_items'),
+            'average_spent_per_user' => $users->count() > 0
+                ? round($reportData->sum('purchase_summary.total_spent') / $users->count())
+                : 0,
         ];
 
         return response()->json([
@@ -433,16 +664,18 @@ class ReportsController extends Controller
         $productId = $request->product_id;
 
         if (!$productId) {
-            return response()->json(['error' => 'Product ID is required'], 400);
+            return response()->json(['error' => 'شناسه محصول الزامی است'], 400);
         }
 
-        $product = Product::with(['categories', 'variants'])->find($productId);
+        $product = Product::with(['categories', 'variants.values.attribute'])->find($productId);
 
         if (!$product) {
-            return response()->json(['error' => 'Product not found'], 404);
+            return response()->json(['error' => 'محصول یافت نشد'], 404);
         }
 
-        // Get all order items for this product
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+
+        // دریافت تمام آیتم‌های سفارش برای این محصول
         $orderItemsQuery = OrderItem::where('product_id', $productId)
             ->with(['order.user', 'variant.values.attribute']);
 
@@ -460,16 +693,16 @@ class ReportsController extends Controller
 
         $orderItems = $orderItemsQuery->orderBy('created_at', 'desc')->get();
 
-        // Group by date for chart
+        // داده‌های روزانه برای نمودار
         $dailyMovements = OrderItem::where('product_id', $productId)
-            ->whereHas('order', function ($q) use ($request) {
-                $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                    ->orWhere('payment_status', 'paid');
-
+            ->whereHas('order', function ($q) use ($request, $validStatuses) {
+                $q->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
                 if ($request->filled('date_from')) {
                     $q->whereDate('created_at', '>=', $request->date_from);
                 }
-
                 if ($request->filled('date_to')) {
                     $q->whereDate('created_at', '<=', $request->date_to);
                 }
@@ -485,13 +718,6 @@ class ReportsController extends Controller
             ->orderBy('date')
             ->get();
 
-        // Calculate running stock balance
-        $runningStock = [];
-        $currentStock = $product->stock;
-
-        // Since we don't have purchase entries, we'll use current stock and subtract sales
-        // You should add a purchase/inventory table for accurate entry tracking
-
         $report = [
             'product' => [
                 'id' => $product->id,
@@ -500,6 +726,8 @@ class ReportsController extends Controller
                 'barcode' => $product->barcode,
                 'current_stock' => $product->stock,
                 'price' => $product->price,
+                'main_image' => $product->main_image,
+                'status' => $product->status,
                 'categories' => $product->categories->pluck('name'),
                 'variants' => $product->variants->map(function ($variant) {
                     return [
@@ -518,6 +746,7 @@ class ReportsController extends Controller
                     'date' => $item->created_at->format('Y-m-d H:i'),
                     'order_id' => $item->order_id,
                     'customer' => $item->order->user->full_name ?? 'کاربر مهمان',
+                    'customer_mobile' => $item->order->user->mobile ?? '-',
                     'quantity' => $item->quantity,
                     'price' => $item->price,
                     'total' => $item->price * $item->quantity,
@@ -525,6 +754,8 @@ class ReportsController extends Controller
                         return $value->attribute->name . ': ' . $value->value;
                     })->join(' - ') : null,
                     'order_status' => $item->order->status,
+                    'payment_status' => $item->order->payment_status,
+                    'payment_method' => $item->order->payment_method,
                 ];
             }),
             'daily_movements' => $dailyMovements,
@@ -535,118 +766,109 @@ class ReportsController extends Controller
                 }),
                 'total_orders' => $orderItems->groupBy('order_id')->count(),
                 'current_stock' => $product->stock,
-                // 'total_incoming' => 0, // Add when you have purchase model
+                'total_customers' => $orderItems->groupBy('order.user_id')->count(),
             ],
+            'filters' => $request->all(),
         ];
 
         return response()->json($report);
     }
 
     /**
-     * Dashboard summary with charts
+     * Get product sales summary (quick stats)
      */
-    public function dashboardReport(Request $request)
+    public function productSalesSummary(Request $request)
     {
-        // Sales overview
-        $salesQuery = Order::query()
-            ->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-            ->orWhere('payment_status', 'paid');
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
 
-        if ($request->filled('date_from')) {
-            $salesQuery->whereDate('created_at', '>=', $request->date_from);
+        $query = Product::whereHas('orderItems', function ($q) use ($request, $validStatuses) {
+            $q->whereHas('order', function ($q2) use ($request, $validStatuses) {
+                $q2->where(function ($query) use ($validStatuses) {
+                    $query->whereIn('status', $validStatuses)
+                        ->orWhere('payment_status', 'paid');
+                });
+                if ($request->filled('date_from')) {
+                    $q2->whereDate('created_at', '>=', $request->date_from);
+                }
+                if ($request->filled('date_to')) {
+                    $q2->whereDate('created_at', '<=', $request->date_to);
+                }
+            });
+        });
+
+        if ($request->filled('category_id')) {
+            $query->whereHas('categories', function ($q) use ($request) {
+                $q->where('categories.id', $request->category_id);
+            });
         }
 
-        if ($request->filled('date_to')) {
-            $salesQuery->whereDate('created_at', '<=', $request->date_to);
-        }
-
-        // Daily sales chart data
-        $dailySales = Order::whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-            ->orWhere('payment_status', 'paid')
-            ->when($request->filled('date_from'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
+        $salesData = $query->join('order_items', 'products.id', '=', 'order_items.product_id')
             ->select(
-                DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total) as total_sales'),
-                DB::raw('COUNT(*) as total_orders')
+                DB::raw('COUNT(DISTINCT products.id) as products_with_sales'),
+                DB::raw('SUM(order_items.quantity) as total_items_sold'),
+                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
+                DB::raw('COUNT(DISTINCT order_items.order_id) as total_orders')
             )
-            ->groupBy('date')
-            ->orderBy('date')
-            ->get();
+            ->first();
 
-        // Top selling products
-        $topProducts = OrderItem::whereHas('order', function ($q) use ($request) {
-            $q->whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-                ->orWhere('payment_status', 'paid');
+        $totalProducts = Product::count();
+        $productsWithoutSales = $totalProducts - ($salesData->products_with_sales ?? 0);
 
+        return response()->json([
+            'total_products' => $totalProducts,
+            'products_with_sales' => $salesData->products_with_sales ?? 0,
+            'products_without_sales' => $productsWithoutSales,
+            'total_items_sold' => $salesData->total_items_sold ?? 0,
+            'total_revenue' => $salesData->total_revenue ?? 0,
+            'total_orders' => $salesData->total_orders ?? 0,
+            'filters' => $request->all(),
+        ]);
+    }
+
+    /**
+     * Get top selling products
+     */
+    public function topSellingProducts(Request $request)
+    {
+        $validStatuses = ['paid', 'completed', 'shipped', 'delivered'];
+        $limit = $request->filled('limit') ? $request->limit : 10;
+
+        $query = OrderItem::whereHas('order', function ($q) use ($request, $validStatuses) {
+            $q->where(function ($query) use ($validStatuses) {
+                $query->whereIn('status', $validStatuses)
+                    ->orWhere('payment_status', 'paid');
+            });
             if ($request->filled('date_from')) {
                 $q->whereDate('created_at', '>=', $request->date_from);
             }
-
             if ($request->filled('date_to')) {
                 $q->whereDate('created_at', '<=', $request->date_to);
             }
-        })
-            ->join('products', 'order_items.product_id', '=', 'products.id')
+        });
+
+        if ($request->filled('category_id')) {
+            $query->whereHas('product.categories', function ($q) use ($request) {
+                $q->where('categories.id', $request->category_id);
+            });
+        }
+
+        $products = $query->join('products', 'order_items.product_id', '=', 'products.id')
             ->select(
                 'products.id',
                 'products.title',
+                'products.main_image',
+                'products.price',
+                'products.stock',
                 DB::raw('SUM(order_items.quantity) as total_quantity'),
-                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue')
+                DB::raw('SUM(order_items.price * order_items.quantity) as total_revenue'),
+                DB::raw('COUNT(DISTINCT order_items.order_id) as order_count'),
+                DB::raw('AVG(order_items.price) as average_price')
             )
-            ->groupBy('products.id', 'products.title')
+            ->groupBy('products.id', 'products.title', 'products.main_image', 'products.price', 'products.stock')
             ->orderBy('total_revenue', 'desc')
-            ->limit(10)
+            ->limit($limit)
             ->get();
 
-        // Sales by payment method
-        $paymentMethods = Order::whereIn('status', ['paid', 'completed', 'shipped', 'delivered'])
-            ->orWhere('payment_status', 'paid')
-            ->when($request->filled('date_from'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select(
-                'payment_method',
-                DB::raw('COUNT(*) as orders_count'),
-                DB::raw('SUM(total) as total_amount')
-            )
-            ->groupBy('payment_method')
-            ->get();
-
-        // Sales by status
-        $ordersByStatus = Order::when($request->filled('date_from'), function ($q) use ($request) {
-            return $q->whereDate('created_at', '>=', $request->date_from);
-        })
-            ->when($request->filled('date_to'), function ($q) use ($request) {
-                return $q->whereDate('created_at', '<=', $request->date_to);
-            })
-            ->select('status', DB::raw('COUNT(*) as count'))
-            ->groupBy('status')
-            ->get();
-
-        // Summary statistics
-        $summary = [
-            'total_sales' => $salesQuery->sum('total'),
-            'total_orders' => $salesQuery->count(),
-            'average_order_value' => $salesQuery->count() > 0
-                ? round($salesQuery->sum('total') / $salesQuery->count())
-                : 0,
-            'total_customers' => $salesQuery->distinct('user_id')->count('user_id'),
-        ];
-
-        return response()->json([
-            'summary' => $summary,
-            'daily_sales' => $dailySales,
-            'top_products' => $topProducts,
-            'payment_methods' => $paymentMethods,
-            'orders_by_status' => $ordersByStatus,
-        ]);
+        return response()->json($products);
     }
 }
