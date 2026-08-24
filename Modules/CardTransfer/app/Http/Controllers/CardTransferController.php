@@ -3,6 +3,7 @@
 namespace Modules\CardTransfer\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Services\SmsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -22,11 +23,14 @@ class CardTransferController extends Controller
 {
     protected ProductStockService $productStockService;
     protected ClubService $clubService;
+    protected SmsService $smsService;
 
-    public function __construct(ProductStockService $productStockService, ClubService $clubService)
+
+    public function __construct(ProductStockService $productStockService, ClubService $clubService, SmsService $smsService)
     {
         $this->productStockService = $productStockService;
         $this->clubService = $clubService;
+        $this->smsService = $smsService;
     }
     /**
      * لیست رسیدهای کارت به کارت برای ادمین
@@ -287,7 +291,8 @@ class CardTransferController extends Controller
         $order->update([
             'status' => 'card_transfer_review'
         ]);
-
+        $this->smsService->sendToKavenegar('cardtocardcustomerreciept', $user->mobile, $order->id);
+        $this->smsService->sendToAdmins('cardtocardadminreciept', $order->id);
         return response()->json([
             'success' => true,
             'receipt' => $receipt,
@@ -312,6 +317,7 @@ class CardTransferController extends Controller
 
         return DB::transaction(function () use ($receipt, $request, $admin) {
             // در صورت رد، موجودی را برگردان
+            $user = $receipt->order->user;
             if ($request->status === 'rejected') {
                 // بازگردانی موجودی آیتم‌های سفارش
                 foreach ($receipt->order->items as $item) {
@@ -338,6 +344,7 @@ class CardTransferController extends Controller
                         Log::error("Coupon release failed: " . $e->getMessage());
                     }
                 }
+                $this->smsService->sendToKavenegar('rejectcardtocardrecieptcustomer', $user->mobile, $receipt->order->id);
             }
 
             // در صورت تأیید
@@ -346,6 +353,7 @@ class CardTransferController extends Controller
                     'status' => 'paid',
                     'payment_status' => 'paid'
                 ]);
+                $this->smsService->sendToKavenegar('approvedcardtocardrecieptcustomer', $user->mobile, $receipt->order->id);
             }
 
             // بروزرسانی رسید
