@@ -17,6 +17,11 @@ use Modules\Locations\Models\City;
 use Modules\Locations\Models\Province;
 use Modules\Products\Models\ProductVariant;
 use Modules\Shipping\Models\Shipping;
+use Modules\Reports\Exports\UserPurchaseReportExport;
+use Maatwebsite\Excel\Facades\Excel;
+use Modules\Reports\Exports\OrderReportExport;
+use Modules\Reports\Exports\ProductInventoryReportExport;
+use Modules\Reports\Exports\VariantSalesReportExport;
 
 class ReportsController extends Controller
 {
@@ -128,7 +133,16 @@ class ReportsController extends Controller
 
         // تحلیل فروش بر اساس ویژگی‌ها
         $attributeAnalysis = $this->analyzeSalesByAttribute($reportData);
-
+        if ($request->get('export') === 'excel') {
+            return Excel::download(
+                new VariantSalesReportExport(
+                    $reportData,  // آرایه ساده است، نیازی به toArray() نیست
+                    $summary,
+                    $filters
+                ),
+                'variant-sales-report-' . now()->format('Y-m-d-His') . '.xlsx'
+            );
+        }
         return response()->json([
             'data' => $reportData,
             'summary' => $summary,
@@ -727,7 +741,16 @@ class ReportsController extends Controller
                 ? round($totalSales / $users->count())
                 : 0,
         ];
-
+        if ($request->get('export') === 'excel') {
+            return Excel::download(
+                new UserPurchaseReportExport(
+                    $reportData->toArray(),
+                    $summary,
+                    $filters
+                ),
+                'user-purchase-report-' . now()->format('Y-m-d-His') . '.xlsx'
+            );
+        }
         return response()->json([
             'data' => $reportData,
             'summary' => $summary,
@@ -931,7 +954,83 @@ class ReportsController extends Controller
                 return $item['sales_summary']['total_quantity_sold'] == 0;
             })->count(),
         ];
+        // ============ خروجی Excel ============
+        if ($request->get('export') === 'excel') {
+            // برای خروجی Excel، همه محصولات را بدون تغییر می‌گیریم
+            $exportQuery = Product::query()
+                ->with(['categories', 'variants.values.attribute']);
 
+            // اعمال همان فیلترها
+            if ($request->filled('category_id')) {
+                $exportQuery->whereHas('categories', function ($q) use ($request) {
+                    $q->where('categories.id', $request->category_id);
+                });
+            }
+            if ($request->filled('product_id')) {
+                $exportQuery->where('id', $request->product_id);
+            }
+            if ($request->filled('status')) {
+                $exportQuery->where('status', $request->status);
+            }
+            if ($request->filled('search')) {
+                $exportQuery->where(function ($q) use ($request) {
+                    $q->where('title', 'like', "%{$request->search}%")
+                        ->orWhere('sku', 'like', "%{$request->search}%")
+                        ->orWhere('barcode', 'like', "%{$request->search}%");
+                });
+            }
+
+            $productsForExport = $exportQuery->get();
+
+            // ساخت همان reportData برای export
+            $exportData = $productsForExport->map(function ($product) use ($filters) {
+                $orderItemsQuery = $this->getSuccessfulOrderItemsQuery($filters)
+                    ->where('product_id', $product->id);
+
+                $salesData = $orderItemsQuery->select(
+                    DB::raw('SUM(quantity) as total_quantity'),
+                    DB::raw('SUM(price * quantity) as total_revenue'),
+                    DB::raw('COUNT(DISTINCT order_id) as total_orders')
+                )->first();
+
+                $totalIncoming = $product->stock + ($salesData->total_quantity ?? 0);
+
+                return [
+                    'product' => [
+                        'id' => $product->id,
+                        'title' => $product->title,
+                        'sku' => $product->sku,
+                        'barcode' => $product->barcode,
+                        'price' => $product->price,
+                        'stock' => $product->stock,
+                        'status' => $product->status,
+                        'categories' => $product->categories->pluck('name'),
+                    ],
+                    'inventory_summary' => [
+                        'total_incoming' => $totalIncoming,
+                        'total_outgoing' => $salesData->total_quantity ?? 0,
+                        'current_stock' => $product->stock,
+                    ],
+                    'sales_summary' => [
+                        'total_quantity_sold' => $salesData->total_quantity ?? 0,
+                        'total_revenue' => $salesData->total_revenue ?? 0,
+                        'total_orders' => $salesData->total_orders ?? 0,
+                        'average_price' => ($salesData->total_quantity ?? 0) > 0
+                            ? round(($salesData->total_revenue ?? 0) / ($salesData->total_quantity ?? 0))
+                            : 0,
+                    ],
+                ];
+            });
+
+            return Excel::download(
+                new ProductInventoryReportExport(
+                    $exportData->toArray(),
+                    $summary,
+                    $filters
+                ),
+                'product-inventory-report-' . now()->format('Y-m-d-His') . '.xlsx'
+            );
+        }
         return response()->json([
             'data' => $reportData,
             'summary' => $summary,
@@ -1165,7 +1264,93 @@ class ReportsController extends Controller
             'provinces' => $this->getProvinces(),
             'shipping_methods' => $this->getShippingMethods(),
         ];
+        // ============ خروجی Excel ============
+        if ($request->get('export') === 'excel') {
+            // برای خروجی Excel، همه سفارشات را بدون pagination می‌گیریم
+            $exportQuery = Order::query()
+                ->with([
+                    'user',
+                    'address',
+                    'address.province',
+                    'address.city',
+                    'shipping',
+                    'items.product',
+                    'coupon'
+                ]);
 
+            // اعمال همان فیلترها (کد فیلترها را تکرار می‌کنیم)
+            if ($request->filled('date_from')) {
+                $exportQuery->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $exportQuery->whereDate('created_at', '<=', $request->date_to);
+            }
+            if ($request->filled('status')) {
+                $exportQuery->where('status', $request->status);
+            }
+            if ($request->filled('payment_status')) {
+                $exportQuery->where('payment_status', $request->payment_status);
+            }
+            if ($request->filled('payment_method')) {
+                $exportQuery->where('payment_method', $request->payment_method);
+            }
+            if ($request->filled('province')) {
+                $exportQuery->whereHas('address.province', function ($q) use ($request) {
+                    $q->where('name', 'like', "%{$request->province}%");
+                });
+            }
+            if ($request->filled('city')) {
+                $exportQuery->whereHas('address.city', function ($q) use ($request) {
+                    $q->where('name', 'like', "%{$request->city}%");
+                });
+            }
+            if ($request->filled('shipping_method_id')) {
+                $exportQuery->where('shipping_id', $request->shipping_method_id);
+            }
+            if ($request->filled('user_id')) {
+                $exportQuery->where('user_id', $request->user_id);
+            }
+            if ($request->filled('min_total')) {
+                $exportQuery->where('total', '>=', $request->min_total);
+            }
+            if ($request->filled('max_total')) {
+                $exportQuery->where('total', '<=', $request->max_total);
+            }
+            if ($request->filled('has_coupon')) {
+                if ($request->has_coupon) {
+                    $exportQuery->whereNotNull('coupon_id');
+                } else {
+                    $exportQuery->whereNull('coupon_id');
+                }
+            }
+            if ($request->filled('min_discount')) {
+                $exportQuery->where('discount_amount', '>=', $request->min_discount);
+            }
+            if ($request->filled('max_discount')) {
+                $exportQuery->where('discount_amount', '<=', $request->max_discount);
+            }
+
+            // مرتب‌سازی
+            $sortBy = $request->filled('sort_by') ? $request->sort_by : 'created_at';
+            $sortOrder = $request->filled('sort_order') ? $request->sort_order : 'desc';
+            $validSortFields = ['id', 'total', 'created_at', 'status', 'payment_status', 'discount_amount'];
+            if (in_array($sortBy, $validSortFields)) {
+                $exportQuery->orderBy($sortBy, $sortOrder);
+            } else {
+                $exportQuery->orderBy('created_at', 'desc');
+            }
+
+            $ordersForExport = $exportQuery->get();
+
+            return Excel::download(
+                new OrderReportExport(
+                    $ordersForExport->toArray(),
+                    $summary,
+                    $filters
+                ),
+                'orders-report-' . now()->format('Y-m-d-His') . '.xlsx'
+            );
+        }
         return response()->json([
             'data' => $orders,
             'summary' => $summary,
