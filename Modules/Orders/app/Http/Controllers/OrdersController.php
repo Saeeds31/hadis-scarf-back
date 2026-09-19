@@ -145,7 +145,7 @@ class OrdersController extends Controller
             [
                 'message' => 'جزئیات سفارش',
                 'success' => true,
-                'data' => $order->load(['user', 'address.province', 'address.city', 'shipping', 'items.product', 'items.variant.values','cardTransferReceipt'])
+                'data' => $order->load(['user', 'address.province', 'address.city', 'shipping', 'items.product', 'items.variant.values', 'cardTransferReceipt'])
             ]
         );
     }
@@ -375,6 +375,7 @@ class OrdersController extends Controller
         $request->validate([
             'address_id' => 'required|exists:addresses,id',
             'shipping_id' => 'required|exists:shippings,id',
+            'user_note' => 'nullable|string|min:1',
             'payment_method' => 'required|in:wallet,online',
             'gateway' => 'required_if:payment_method,online|string',
             'coupon_code' => 'nullable|string',
@@ -515,6 +516,7 @@ class OrdersController extends Controller
                 'shipping_cost' => $shippingCost,
                 'total' => $total,
                 'payment_method' => $request->payment_method,
+                'user_note' => $request->user_note ?? null,
                 'payment_status' => $toPayOnline > 0 ? 'pending' : 'paid',
                 'status' => $toPayOnline > 0 ? 'pending' : 'paid',
             ]);

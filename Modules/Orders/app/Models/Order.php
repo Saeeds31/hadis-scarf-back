@@ -23,6 +23,7 @@ class Order extends Model
         'coupon_id',
         'address_id',
         'shipping_id',
+        'user_note',
         'subtotal',
         'discount_amount',
         'shipping_cost',
