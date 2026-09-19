@@ -15,6 +15,7 @@ class ProductVariantStoreRequest extends FormRequest
 
             'variants' => 'required|array|min:1',
             'variants.*.sku' => 'nullable|string|max:100',
+            'variants.*.admin_note' => 'nullable|string|min:3',
             'variants.*.stock' => 'nullable|integer|min:0',
             'variants.*.price' => 'required|integer|min:0',
             'variants.*.values' => 'required|array|min:1',

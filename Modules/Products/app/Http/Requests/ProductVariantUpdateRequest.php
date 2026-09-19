@@ -14,6 +14,7 @@ class ProductVariantUpdateRequest extends FormRequest
         return [
             'product_id' => ['sometimes', 'exists:products,id'],
             'sku'              => ['nullable', 'string', 'max:100'],
+            'admin_note'              => ['nullable', 'string', 'min:3'],
             'stock'            => ['nullable', 'integer', 'min:0'],
             'price'            => ['required', 'integer', 'min:0'],
             'values' => 'nullable|array',

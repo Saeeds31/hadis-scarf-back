@@ -34,6 +34,7 @@ class ProductVariantController extends Controller
         foreach ($data['variants'] as $variantData) {
             $variant = $product->variants()->create([
                 'sku'   => $variantData['sku'] ?? null,
+                'admin_note'   => $variantData['admin_note'] ?? null,
                 'price' => $variantData['price'],
                 'stock' => $variantData['stock'] ?? 0,
             ]);
@@ -113,6 +114,7 @@ class ProductVariantController extends Controller
             'variants' => 'required|array',
             'variants.*.id' => 'nullable|exists:product_variants,id',
             'variants.*.sku' => 'nullable|string|max:255',
+            'variants.*.admin_note' => 'nullable|string|min:3',
             'variants.*.price' => 'required|numeric',
             'variants.*.stock' => 'nullable|integer',
             'variants.*.values' => 'required|array',
@@ -137,6 +139,7 @@ class ProductVariantController extends Controller
 
                 $variant->update([
                     'sku'   => $variantData['sku'] ?? null,
+                    'admin_note'   => $variantData['admin_note'] ?? null,
                     'price' => $variantData['price'],
                     'stock' => $variantData['stock'] ?? 0,
                 ]);
@@ -144,6 +147,7 @@ class ProductVariantController extends Controller
                 // واریانت جدید -> ایجاد
                 $variant = $product->variants()->create([
                     'sku'   => $variantData['sku'] ?? null,
+                    'admin_note'   => $variantData['admin_note'] ?? null,
                     'price' => $variantData['price'],
                     'stock' => $variantData['stock'] ?? 0,
                 ]);
