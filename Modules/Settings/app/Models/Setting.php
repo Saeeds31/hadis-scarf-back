@@ -5,6 +5,7 @@ namespace Modules\Settings\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 // use Modules\Settings\Database\Factories\SettingFactory;
+use App\Support\CacheService;
 
 class Setting extends Model
 {
@@ -38,5 +39,12 @@ class Setting extends Model
             'json' => json_encode($value),
             default => $value,
         };
+    }
+    protected static function booted()
+    {
+        $clearCache = fn() => CacheService::forgetSettings();
+
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
 }

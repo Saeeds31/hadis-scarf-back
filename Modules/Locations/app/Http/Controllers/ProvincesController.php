@@ -8,12 +8,17 @@ use Modules\Locations\Http\Requests\ProvinceStoreRequest;
 use Modules\Locations\Http\Requests\ProvinceUpdateRequest;
 use Modules\Locations\Models\Province;
 use Modules\Notifications\Services\NotificationService;
+use App\Support\CacheService;
 
 class ProvincesController extends Controller
 {
     public function frontIndex()
     {
-        $provinces = Province::orderBy('id')->get();
+        $provinces = CacheService::remember(
+            CacheService::BASE_PROVINCE,
+            CacheService::TTL_ONE_MONTH,
+            fn() => Province::orderBy('id')->get()
+        );
         return response()->json([
             'message' => 'لیست استان ها',
             'success' => true,

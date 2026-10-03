@@ -10,6 +10,7 @@ use Modules\Categories\Models\Category;
 use Modules\Comments\Models\Comment;
 use Modules\Orders\Models\OrderItem;
 use Modules\Specifications\Models\Specification;
+use App\Support\CacheService;
 
 // use Modules\Products\Database\Factories\ProductFactory;
 
@@ -67,6 +68,38 @@ class Product extends Model
             ->withPivot('specification_value_id')
             ->withTimestamps();
     }
+    public function getSpecificationsWithValuesAttribute()
+    {
+        if (!$this->relationLoaded('specifications')) {
+            $this->load(['specifications' => function ($query) {
+                $query->with('values'); // Eager loading مقادیر
+            }]);
+        }
+
+        // گروه‌بندی بر اساس specification_id
+        $groupedSpecs = $this->specifications->groupBy('id');
+
+        return $groupedSpecs->map(function ($specs, $specId) {
+            $firstSpec = $specs->first();
+            $values = $specs->map(function ($spec) {
+                $selectedValueId = $spec->pivot->specification_value_id;
+                $selectedValue = $spec->values->firstWhere('id', $selectedValueId);
+
+                return [
+                    'id' => $selectedValueId,
+                    'value' => $selectedValue ? $selectedValue->value : null,
+                    'specification_value_id' => $selectedValueId, // اضافه کردن این برای دسترسی بهتر
+                ];
+            })->values(); // بازنشانی ایندکس‌ها
+
+            return [
+                'specification_id' => $specId,
+                'title' => $firstSpec->title,
+                'values' => $values, // آرایه‌ای از تمام مقادیر
+                'selected_value_ids' => $values->pluck('id')->toArray(), // آیدی‌های انتخاب‌شده
+            ];
+        })->values(); // بازنشانی ایندکس‌های اصلی
+    }
     protected static function booted()
     {
         static::saving(function ($product) {
@@ -78,6 +111,13 @@ class Product extends Model
                 $product->final_price = $product->price;
             }
         });
+        $clearCache = function ($product) {
+            CacheService::forgetProducts();
+            CacheService::forget("product_detail_{$product->id}");
+        };
+
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
     public static function dashboardReport($startDate = null, $endDate = null)
     {

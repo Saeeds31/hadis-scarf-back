@@ -7,6 +7,7 @@ use  Illuminate\Database\Eloquent\Factories\HasFactory;
 use Modules\ArticleCategories\Models\ArticleCategory;
 use Modules\Comments\Models\Comment;
 use Modules\Users\Models\User;
+use App\Support\CacheService;
 
 // use Modules\Articles\Database\Factories\ArticleFactory;
 
@@ -44,5 +45,11 @@ class Article extends Model
         return self::with(['author', 'categories'])->orderBy('created_at', 'desc')
             ->take($limit)
             ->get();
+    }
+    protected static function booted()
+    {
+        $clearCache = fn() => CacheService::forgetBlogs();
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
 }

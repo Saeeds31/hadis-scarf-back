@@ -2,6 +2,8 @@
 
 namespace Modules\Locations\Http\Controllers;
 
+use App\Support\CacheService;
+
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Modules\Addresses\Models\Address;
@@ -17,11 +19,22 @@ class CitiesController extends Controller
 {
     public function frontIndex(Request $request)
     {
-        $query = City::with('province');
-        if ($province_id = $request->get('province_id')) {
-            $query->where('province_id', $province_id);
-        }
-        $cities = $query->orderBy('id')->get();
+        $provinceId = $request->get('province_id');
+        $cacheKey = $provinceId
+            ? "cities_province_{$provinceId}"
+            : 'cities_all';
+        $cities = CacheService::rememberWithTags(
+            [CacheService::TAG_CITIES],
+            $cacheKey,
+            CacheService::TTL_ONE_MONTH,
+            function () use ($provinceId) {
+                $query = City::with('province');
+                if ($provinceId) {
+                    $query->where('province_id', $provinceId);
+                }
+                return $query->orderBy('id')->get();
+            }
+        );
         return response()->json([
             'message' => 'لیست شهرها',
             'success' => true,

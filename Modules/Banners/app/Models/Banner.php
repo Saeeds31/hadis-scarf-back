@@ -5,6 +5,7 @@ namespace Modules\Banners\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 // use Modules\Banners\Database\Factories\BannerFactory;
+use App\Support\CacheService;
 
 class Banner extends Model
 {
@@ -31,5 +32,11 @@ class Banner extends Model
             ->map(function ($banners) {
                 return $banners->toArray();
             });
+    }
+    protected static function booted()
+    {
+        $clearCache = fn() => CacheService::forgetBanners();
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
 }

@@ -25,6 +25,7 @@ class Order extends Model
         'shipping_id',
         'user_note',
         'subtotal',
+        'club_volume_discount',
         'discount_amount',
         'shipping_cost',
         'total',

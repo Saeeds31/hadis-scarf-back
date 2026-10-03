@@ -1,6 +1,9 @@
 <?php
 
+
 namespace Modules\Locations\Models;
+
+use App\Support\CacheService;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -9,8 +12,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 class City extends Model
 {
     use HasFactory;
-    protected $fillable = ['name','province_id'];
-    public function province() {
+    protected $fillable = ['name', 'province_id'];
+    public function province()
+    {
         return $this->belongsTo(Province::class);
+    }
+    protected static function booted(): void
+    {
+        $clearCache = fn() => CacheService::forgetCities();
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
 }

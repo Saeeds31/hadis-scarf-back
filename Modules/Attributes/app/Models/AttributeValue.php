@@ -2,6 +2,8 @@
 
 namespace Modules\Attributes\Models;
 
+use App\Support\CacheService;
+
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Modules\Products\Models\ProductVariant;
@@ -19,5 +21,11 @@ class AttributeValue extends Model
     public function variants()
     {
         return $this->belongsToMany(ProductVariant::class, 'product_variant_values');
+    }
+    protected static function booted()
+    {
+        $clearCache = fn() => CacheService::forgetAttributes();
+        static::saved($clearCache);
+        static::deleted($clearCache);
     }
 }
