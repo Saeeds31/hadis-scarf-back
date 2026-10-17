@@ -386,7 +386,7 @@ class ProductsController extends Controller
                 if (!isset($attributesById[$attr->id])) {
                     $attributesById[$attr->id] = [
                         'id' => $attr->id,
-                        'title' => $attr->name,
+                        'name' => $attr->name,
                         'values' => []
                     ];
                     $attributeOrder[] = $attr->id;
@@ -395,6 +395,7 @@ class ProductsController extends Controller
                 if (!isset($attributesById[$attr->id]['values'][$value->id])) {
                     $attributesById[$attr->id]['values'][$value->id] = [
                         'id' => $value->id,
+                        'extra_value' => $value->extra_value,
                         'value' => $value->value,
                         'is_available' => $isAvailable
                     ];
@@ -446,7 +447,7 @@ class ProductsController extends Controller
                     return [
                         'id' => $v->id,
                         'attribute_id' => $v->attribute->id,
-                        'attribute' => $v->attribute->name,
+                        'attribute' => $v->attribute->title,
                         'value' => $v->value
                     ];
                 })->values()
@@ -460,7 +461,14 @@ class ProductsController extends Controller
             $ref = $variantSummary;
             unset($ref);
         }
-
+        $discount = null;
+        if ($product->discount_value > 0) {
+            if ($product->discount_type === 'percent') {
+                $discount = round(($product->price * $product->discount_value) / 100, 2);
+            } elseif ($product->discount_type === 'fixed') {
+                $discount = $product->discount_value;
+            }
+        }
         return [
             'specifications' => $specs,
             'product' => [
@@ -468,9 +476,12 @@ class ProductsController extends Controller
                 'title' => $product->title,
                 'video' => $product->video,
                 'images' => $product->images,
+                'discount' => $discount,
                 'status' => $product->status,
                 'description' => $product->description,
                 'price' => $product->price,
+                'discount_value' => $product->discount_value,
+                'discount_type' => $product->discount_type,
                 'final_price' => $product->final_price,
                 'main_image' => $product->main_image,
             ],
@@ -483,11 +494,6 @@ class ProductsController extends Controller
                     'sku' => $variant->sku,
                     'price' => $variant->price,
                     'stock' => $variant->stock,
-                    'discount_start_at' => $variant->discount_start_at,
-                    'discount_end_at' => $variant->discount_end_at,
-                    'discount_value' => $variant->discount_value,
-                    'discount_type' => $variant->discount_type,
-                    'final_price' => $variant->final_price,
                     'is_available' => $variant->stock > 0,
                     'values' => $variant->values->map(function ($v) {
                         return [
