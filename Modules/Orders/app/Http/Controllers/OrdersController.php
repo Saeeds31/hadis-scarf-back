@@ -45,7 +45,12 @@ class OrdersController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Order::with(['user', 'address', 'shipping']);
+        $query = Order::with([
+            'user',
+            'anipoOrder',
+            'address',
+            'shipping'
+        ]);
 
         // ============ جستجو ============
         if ($search = $request->get('search')) {
@@ -145,7 +150,7 @@ class OrdersController extends Controller
             [
                 'message' => 'جزئیات سفارش',
                 'success' => true,
-                'data' => $order->load(['user', 'address.province', 'address.city', 'gatewayTransactions', 'shipping', 'items.product', 'items.variant.values', 'cardTransferReceipt'])
+                'data' => $order->load(['user', 'anipoOrder', 'address.province', 'address.city', 'gatewayTransactions', 'shipping', 'items.product', 'items.variant.values', 'cardTransferReceipt'])
             ]
         );
     }
@@ -328,7 +333,13 @@ class OrdersController extends Controller
     public function todaysOrders()
     {
         $today = Carbon::today();
-        $orders = Order::with(['items', 'user', 'address', 'shipping'])
+        $orders = Order::with([
+            'items',
+            'anipoOrder',
+            'user',
+            'address',
+            'shipping'
+        ])
             ->whereDate('created_at', $today)->where('status', "paid")
             ->get();
 
@@ -355,6 +366,7 @@ class OrdersController extends Controller
             'user',
             'address.province',
             'address.city',
+            'anipoOrder',
             'shipping',
             'gatewayTransactions',
             'items.product',

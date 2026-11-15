@@ -30,5 +30,6 @@
     "Story": true,
     "Payment": true,
     "Club": true,
-    "CardTransfer": true
+    "CardTransfer": true,
+    "Anipo": true
 }

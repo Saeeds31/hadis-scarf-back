@@ -34,6 +34,7 @@
             "Modules\\Users\\": "Modules/Users/app/",
             "Modules\\Locations\\": "Modules/Locations/app/",
             "Modules\\Addresses\\": "Modules/Addresses/app/",
+            "Modules\\Anipo\\": "Modules/Anipo/app/",
             "Modules\\Wallet\\": "Modules/Wallet/app/",
             "Modules\\Sliders\\": "Modules/Sliders/app/",
             "Modules\\Menus\\": "Modules/Menus/app/",

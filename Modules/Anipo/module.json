@@ -1,0 +1,11 @@
+{
+    "name": "Anipo",
+    "alias": "anipo",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Anipo\\Providers\\AnipoServiceProvider"
+    ],
+    "files": []
+}

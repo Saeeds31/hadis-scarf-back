@@ -8,6 +8,7 @@ use Modules\Addresses\Models\Address;
 use Modules\Users\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Modules\Anipo\Models\AnipoOrder;
 use Modules\CardTransfer\Models\CardTransferReceipt;
 use Modules\Coupons\Models\Coupon;
 use Modules\Gateway\Models\GatewayTransaction;
@@ -192,5 +193,9 @@ class Order extends Model
             'payable'
 
         );
+    }
+    public function anipoOrder()
+    {
+        return $this->hasOne(AnipoOrder::class, 'order_id');
     }
 }
